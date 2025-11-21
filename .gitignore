@@ -36,3 +36,19 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+
+
+forensic_logs/
+*.pcap
+*.h2.db
+
+.DS_Store
+Thumbs.db
+
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+.vscode/

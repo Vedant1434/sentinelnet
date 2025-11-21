@@ -14,14 +14,13 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 
 import java.io.File;
-import java.io.FilenameFilter;
 import java.net.Inet4Address;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * UPDATED: Added logic for Dynamic Settings and Forensic File Management.
+ * UPDATED: Saves pcap files to 'forensic_logs' directory.
  */
 @Service
 @Slf4j
@@ -36,6 +35,9 @@ public class SentinelNetService {
     private final BlockingQueue<Packet> packetQueue = new LinkedBlockingQueue<>(10000);
     private final ExecutorService processorPool = Executors.newSingleThreadExecutor();
 
+    // Define the dedicated folder for logs
+    private static final String LOG_DIR = "forensic_logs";
+
     // Statistics
     private final DescriptiveStatistics packetRateStats = new DescriptiveStatistics(100);
     private final AtomicLong currentPacketCount = new AtomicLong(0);
@@ -43,7 +45,7 @@ public class SentinelNetService {
     private final AtomicLong udpCount = new AtomicLong(0);
     private final AtomicLong icmpCount = new AtomicLong(0);
 
-    // Dynamic Thresholds (Now Instance Variables for Runtime Updates)
+    // Dynamic Thresholds
     private int synFloodThreshold = 50;
     private int portScanThreshold = 20;
     private double zScoreThreshold = 3.0;
@@ -53,30 +55,33 @@ public class SentinelNetService {
         this.alertRepository = alertRepository;
     }
 
-    // --- Dynamic Settings Getters/Setters ---
+    // --- Getters/Setters ---
     public int getSynFloodThreshold() { return synFloodThreshold; }
     public void setSynFloodThreshold(int val) { this.synFloodThreshold = val; log.info("Updated SYN Threshold: " + val); }
-
     public int getPortScanThreshold() { return portScanThreshold; }
     public void setPortScanThreshold(int val) { this.portScanThreshold = val; log.info("Updated PortScan Threshold: " + val); }
-
     public double getZScoreThreshold() { return zScoreThreshold; }
     public void setZScoreThreshold(double val) { this.zScoreThreshold = val; log.info("Updated Z-Score Threshold: " + val); }
 
     // --- Forensics Management ---
     public List<String> listForensicFiles() {
-        File dir = new File(".");
-        File[] files = dir.listFiles((d, name) -> name.startsWith("forensics_") && name.endsWith(".pcap"));
+        File dir = new File(LOG_DIR);
+        // Create dir if it doesn't exist to avoid errors
+        if (!dir.exists()) dir.mkdirs();
+
+        File[] files = dir.listFiles((d, name) -> name.endsWith(".pcap"));
         if (files == null) return Collections.emptyList();
+
         List<String> names = new ArrayList<>();
         for (File f : files) names.add(f.getName());
+        // Sort newest first
+        names.sort(Collections.reverseOrder());
         return names;
     }
 
     public File getForensicFile(String filename) {
-        // Basic security check to prevent path traversal
         if (filename.contains("..") || !filename.endsWith(".pcap")) return null;
-        return new File(filename);
+        return new File(LOG_DIR, filename);
     }
 
     @PostConstruct
@@ -96,8 +101,17 @@ public class SentinelNetService {
 
             handle = nif.openLive(65536, PcapNetworkInterface.PromiscuousMode.PROMISCUOUS, 10);
 
+            // Ensure Log Directory Exists
+            File logDir = new File(LOG_DIR);
+            if (!logDir.exists()) {
+                boolean created = logDir.mkdirs();
+                if (created) log.info("Created forensics directory: {}", LOG_DIR);
+            }
+
             try {
-                dumper = handle.dumpOpen("forensics_" + System.currentTimeMillis() + ".pcap");
+                String filePath = LOG_DIR + File.separator + "forensics_" + System.currentTimeMillis() + ".pcap";
+                dumper = handle.dumpOpen(filePath);
+                log.info("Forensics logging to: {}", filePath);
             } catch (Exception e) {
                 log.warn("Forensics disabled: {}", e.getMessage());
             }
