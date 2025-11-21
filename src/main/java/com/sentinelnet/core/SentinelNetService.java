@@ -1,3 +1,4 @@
+// ... existing imports ...
 package com.sentinelnet.core;
 
 import com.sentinelnet.PersistentAlert;
@@ -20,7 +21,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * UPDATED: Saves pcap files to 'forensic_logs' directory.
+ * UPDATED: Added Active Defense (IP Blocking) capabilities.
  */
 @Service
 @Slf4j
@@ -35,7 +36,9 @@ public class SentinelNetService {
     private final BlockingQueue<Packet> packetQueue = new LinkedBlockingQueue<>(10000);
     private final ExecutorService processorPool = Executors.newSingleThreadExecutor();
 
-    // Define the dedicated folder for logs
+    // Active Defense: Blacklisted IPs
+    private final Set<String> blockedIps = ConcurrentHashMap.newKeySet();
+
     private static final String LOG_DIR = "forensic_logs";
 
     // Statistics
@@ -45,7 +48,6 @@ public class SentinelNetService {
     private final AtomicLong udpCount = new AtomicLong(0);
     private final AtomicLong icmpCount = new AtomicLong(0);
 
-    // Dynamic Thresholds
     private int synFloodThreshold = 50;
     private int portScanThreshold = 20;
     private double zScoreThreshold = 3.0;
@@ -55,26 +57,38 @@ public class SentinelNetService {
         this.alertRepository = alertRepository;
     }
 
+    // --- Blocking Management ---
+    public void blockIp(String ip) {
+        blockedIps.add(ip);
+        publishAlert("MANUAL BLOCK", "Administrator blocked IP: " + ip, "HIGH");
+        log.info("IP Blocked: {}", ip);
+    }
+
+    public void unblockIp(String ip) {
+        blockedIps.remove(ip);
+        log.info("IP Unblocked: {}", ip);
+    }
+
+    public Set<String> getBlockedIps() {
+        return blockedIps;
+    }
+
     // --- Getters/Setters ---
     public int getSynFloodThreshold() { return synFloodThreshold; }
-    public void setSynFloodThreshold(int val) { this.synFloodThreshold = val; log.info("Updated SYN Threshold: " + val); }
+    public void setSynFloodThreshold(int val) { this.synFloodThreshold = val; }
     public int getPortScanThreshold() { return portScanThreshold; }
-    public void setPortScanThreshold(int val) { this.portScanThreshold = val; log.info("Updated PortScan Threshold: " + val); }
+    public void setPortScanThreshold(int val) { this.portScanThreshold = val; }
     public double getZScoreThreshold() { return zScoreThreshold; }
-    public void setZScoreThreshold(double val) { this.zScoreThreshold = val; log.info("Updated Z-Score Threshold: " + val); }
+    public void setZScoreThreshold(double val) { this.zScoreThreshold = val; }
 
-    // --- Forensics Management ---
+    // --- Forensics ---
     public List<String> listForensicFiles() {
         File dir = new File(LOG_DIR);
-        // Create dir if it doesn't exist to avoid errors
         if (!dir.exists()) dir.mkdirs();
-
         File[] files = dir.listFiles((d, name) -> name.endsWith(".pcap"));
         if (files == null) return Collections.emptyList();
-
         List<String> names = new ArrayList<>();
         for (File f : files) names.add(f.getName());
-        // Sort newest first
         names.sort(Collections.reverseOrder());
         return names;
     }
@@ -101,17 +115,11 @@ public class SentinelNetService {
 
             handle = nif.openLive(65536, PcapNetworkInterface.PromiscuousMode.PROMISCUOUS, 10);
 
-            // Ensure Log Directory Exists
             File logDir = new File(LOG_DIR);
-            if (!logDir.exists()) {
-                boolean created = logDir.mkdirs();
-                if (created) log.info("Created forensics directory: {}", LOG_DIR);
-            }
+            if (!logDir.exists()) logDir.mkdirs();
 
             try {
-                String filePath = LOG_DIR + File.separator + "forensics_" + System.currentTimeMillis() + ".pcap";
-                dumper = handle.dumpOpen(filePath);
-                log.info("Forensics logging to: {}", filePath);
+                dumper = handle.dumpOpen(LOG_DIR + File.separator + "forensics_" + System.currentTimeMillis() + ".pcap");
             } catch (Exception e) {
                 log.warn("Forensics disabled: {}", e.getMessage());
             }
@@ -123,14 +131,10 @@ public class SentinelNetService {
                     if (dumper != null && dumper.isOpen()) {
                         dumper.dump(packet, handle.getTimestamp());
                     }
-                } catch (NotOpenException e) { /* Ignore */ }
+                } catch (NotOpenException e) { }
             });
-
-        } catch (UnsatisfiedLinkError e) {
-            log.error("CRITICAL ERROR: Npcap not installed or 'WinPcap Mode' not checked.");
         } catch (Throwable e) {
-            log.error("Capture Loop Failed: {}", e.getMessage());
-            e.printStackTrace();
+            log.error("Capture Loop Error: {}", e.getMessage());
         }
     }
 
@@ -143,16 +147,13 @@ public class SentinelNetService {
                     if (addr.getAddress() instanceof Inet4Address) {
                         String ip = addr.getAddress().getHostAddress();
                         if (!ip.equals("0.0.0.0") && !ip.equals("127.0.0.1") && !ip.startsWith("169.254")) {
-                            log.info("Auto-selected Device with IP: {}", ip);
                             return dev;
                         }
                     }
                 }
             }
             if (!allDevs.isEmpty()) return allDevs.get(0);
-        } catch (PcapNativeException e) {
-            log.error("Failed to list network devices: {}", e.getMessage());
-        }
+        } catch (Exception e) { }
         return null;
     }
 
@@ -164,9 +165,7 @@ public class SentinelNetService {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
-            } catch (Exception e) {
-                log.error("Processing Error: {}", e.getMessage());
-            }
+            } catch (Exception e) { }
         }
     }
 
@@ -178,6 +177,14 @@ public class SentinelNetService {
             String srcIp = ipV4Packet.getHeader().getSrcAddr().getHostAddress();
             String dstIp = ipV4Packet.getHeader().getDstAddr().getHostAddress();
             String protocol = ipV4Packet.getHeader().getProtocol().name();
+
+            // --- BLOCKING CHECK ---
+            if (blockedIps.contains(srcIp)) {
+                if (currentPacketCount.get() % 50 == 0) {
+                    log.info("Blocked packet dropped from: " + srcIp);
+                }
+                return; // Drop processing
+            }
 
             if (protocol.equalsIgnoreCase("TCP")) tcpCount.incrementAndGet();
             else if (protocol.equalsIgnoreCase("UDP")) udpCount.incrementAndGet();
@@ -203,9 +210,7 @@ public class SentinelNetService {
             });
 
             checkRules(srcIp, dstIp, isSyn, destPort);
-        } catch (Exception e) {
-            // Ignore malformed
-        }
+        } catch (Exception e) { }
     }
 
     private void checkRules(String srcIp, String dstIp, boolean isSyn, int destPort) {
@@ -261,9 +266,7 @@ public class SentinelNetService {
             alertRepository.save(dbAlert);
             Alert alert = new Alert(type, message, severity, new Date());
             eventPublisher.publishEvent(new AlertEvent(this, alert));
-        } catch (Exception e) {
-            log.error("DB Error: {}", e.getMessage());
-        }
+        } catch (Exception e) { }
     }
 
     @PreDestroy
@@ -280,7 +283,6 @@ public class SentinelNetService {
         public FlowRecord(String s, String d, String p) {
             this.srcIp = s; this.dstIp = d; this.protocol = p; this.lastSeen = System.currentTimeMillis();
         }
-
         public void update(int len, boolean isSyn, int port) {
             this.packetCount++; this.bytes += len; this.lastSeen = System.currentTimeMillis();
             if (isSyn) this.synCount++;
@@ -288,6 +290,10 @@ public class SentinelNetService {
         }
 
         public long getPacketCount() { return packetCount; }
+
+        // ADDED: Getter for Bytes so it is serialized to JSON
+        public long getBytes() { return bytes; }
+
         public int getSynCount() { return synCount; }
         public void setSynCount(int s) { this.synCount = s; }
         public Set<Integer> getUniquePorts() { return uniquePorts; }
@@ -299,14 +305,9 @@ public class SentinelNetService {
 
     public static class Alert {
         private String type; private String description; private String severity; private Date timestamp;
-
         public Alert(String type, String description, String severity, Date timestamp) {
-            this.type = type;
-            this.description = description;
-            this.severity = severity;
-            this.timestamp = timestamp;
+            this.type = type; this.description = description; this.severity = severity; this.timestamp = timestamp;
         }
-
         public String getType() { return type; }
         public String getDescription() { return description; }
         public String getSeverity() { return severity; }

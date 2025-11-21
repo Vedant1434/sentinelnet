@@ -22,10 +22,8 @@ import org.springframework.web.socket.config.annotation.*;
 import java.io.File;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
-/**
- * UPDATED: Added Forensics and Settings REST Controllers.
- */
 @SpringBootApplication
 @EnableScheduling
 public class SentinelNetApplication {
@@ -34,7 +32,6 @@ public class SentinelNetApplication {
     }
 }
 
-// --- WebSocket Configuration ---
 @org.springframework.context.annotation.Configuration
 @EnableWebSocketMessageBroker
 class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
@@ -43,14 +40,12 @@ class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         config.enableSimpleBroker("/topic");
         config.setApplicationDestinationPrefixes("/app");
     }
-
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         registry.addEndpoint("/ws-sentinel").withSockJS();
     }
 }
 
-// --- DTOs ---
 @Data @NoArgsConstructor @AllArgsConstructor
 class SettingsDTO {
     private int synFloodThreshold;
@@ -58,13 +53,10 @@ class SettingsDTO {
     private double zScoreThreshold;
 }
 
-// --- Controllers ---
 @Controller
 class WebController {
     @GetMapping("/")
-    public String dashboard() {
-        return "dashboard";
-    }
+    public String dashboard() { return "dashboard"; }
 }
 
 @RestController
@@ -74,23 +66,14 @@ class ApiController {
     private final AlertRepository alertRepository;
 
     @GetMapping("/api/flows")
-    public Collection<SentinelNetService.FlowRecord> getFlows() {
-        return service.getActiveFlows();
-    }
+    public Collection<SentinelNetService.FlowRecord> getFlows() { return service.getActiveFlows(); }
 
     @GetMapping("/api/alerts/history")
-    public List<PersistentAlert> getAlertHistory() {
-        return alertRepository.findTop50ByOrderByIdDesc();
-    }
+    public List<PersistentAlert> getAlertHistory() { return alertRepository.findTop50ByOrderByIdDesc(); }
 
-    // --- Settings Endpoints ---
     @GetMapping("/api/settings")
     public SettingsDTO getSettings() {
-        return new SettingsDTO(
-                service.getSynFloodThreshold(),
-                service.getPortScanThreshold(),
-                service.getZScoreThreshold()
-        );
+        return new SettingsDTO(service.getSynFloodThreshold(), service.getPortScanThreshold(), service.getZScoreThreshold());
     }
 
     @PostMapping("/api/settings")
@@ -101,17 +84,32 @@ class ApiController {
         return ResponseEntity.ok("Settings Updated");
     }
 
-    // --- Forensics Endpoints ---
-    @GetMapping("/api/forensics")
-    public List<String> listForensicFiles() {
-        return service.listForensicFiles();
+    // --- BLOCKING ENDPOINTS ---
+    @PostMapping("/api/block/{ip}")
+    public ResponseEntity<String> blockIp(@PathVariable String ip) {
+        service.blockIp(ip);
+        return ResponseEntity.ok("IP Blocked: " + ip);
     }
+
+    @PostMapping("/api/unblock/{ip}")
+    public ResponseEntity<String> unblockIp(@PathVariable String ip) {
+        service.unblockIp(ip);
+        return ResponseEntity.ok("IP Unblocked: " + ip);
+    }
+
+    @GetMapping("/api/blocked")
+    public Set<String> getBlockedIps() {
+        return service.getBlockedIps();
+    }
+
+    // --- Forensics ---
+    @GetMapping("/api/forensics")
+    public List<String> listForensicFiles() { return service.listForensicFiles(); }
 
     @GetMapping("/api/forensics/download/{filename}")
     public ResponseEntity<Resource> downloadFile(@PathVariable String filename) {
         File file = service.getForensicFile(filename);
         if (file == null || !file.exists()) return ResponseEntity.notFound().build();
-
         Resource resource = new FileSystemResource(file);
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
@@ -120,17 +118,14 @@ class ApiController {
     }
 }
 
-// --- Event Listener ---
 @Controller
 @AllArgsConstructor
 class DashboardPushService {
     private final SimpMessagingTemplate messagingTemplate;
-
     @EventListener
     public void handleAlert(SentinelNetService.AlertEvent event) {
         messagingTemplate.convertAndSend("/topic/alerts", event.getAlert());
     }
-
     @EventListener
     public void handleStats(SentinelNetService.StatsEvent event) {
         messagingTemplate.convertAndSend("/topic/stats", event.getStats());

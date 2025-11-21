@@ -2,41 +2,137 @@
 <html xmlns:th="http://www.thymeleaf.org">
 <head>
     <meta charset="UTF-8">
-    <title>SentinelNet Dashboard</title>
+    <title>SentinelNet: Security Operations Center</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
 
     <style>
-        body { background-color: #f4f6f9; color: #333; }
-        .sidebar { height: 100vh; background: #2c3e50; color: white; padding: 20px; position: fixed; width: 250px; }
-        .main-content { margin-left: 250px; padding: 20px; }
-        .card { border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        .alert-box { max-height: 400px; overflow-y: auto; }
-        .alert-item { padding: 10px; border-left: 5px solid; margin-bottom: 5px; background: white; }
-        .alert-CRITICAL { border-color: #dc3545; background-color: #ffe6e6; }
-        .alert-HIGH { border-color: #fd7e14; }
-        .alert-MEDIUM { border-color: #ffc107; }
-        .metric-value { font-size: 2em; font-weight: bold; }
-        .nav-link { cursor: pointer; color: rgba(255,255,255,0.8); }
-        .nav-link:hover, .nav-link.active { color: white; font-weight: bold; }
+        :root {
+            --bg-dark: #1a1a2e;
+            --bg-panel: #16213e;
+            --accent: #0f3460;
+            --highlight: #e94560;
+            --text-main: #e0e0e0;
+            --text-muted: #a0a0a0;
+        }
+        body { background-color: var(--bg-dark); color: var(--text-main); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+
+        .sidebar {
+            height: 100vh; background: var(--bg-panel); padding: 20px; position: fixed; width: 260px;
+            border-right: 1px solid #333; box-shadow: 2px 0 10px rgba(0,0,0,0.5); z-index: 100;
+        }
+        .sidebar h3 { color: var(--highlight); font-weight: bold; letter-spacing: 1px; }
+        .nav-link { color: var(--text-muted); margin-bottom: 5px; border-radius: 5px; transition: 0.3s; cursor: pointer; }
+        .nav-link:hover, .nav-link.active { background: var(--accent); color: white; padding-left: 15px; }
+        .nav-link i { width: 25px; }
+
+        .main-content { margin-left: 260px; padding: 30px; }
+
+        .card {
+            background-color: var(--bg-panel); border: 1px solid #333; color: var(--text-main);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3); margin-bottom: 20px; border-radius: 8px;
+        }
+        .card h5, .card h6 { color: var(--text-main); text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px; }
+
+        .metric-value { font-size: 2.2em; font-weight: 600; text-shadow: 0 0 10px rgba(255,255,255,0.1); }
+        .text-neon-green { color: #00ff88; }
+        .text-neon-blue { color: #00d4ff; }
+        .text-neon-red { color: #ff4d4d; text-shadow: 0 0 8px rgba(255, 77, 77, 0.6); }
+
+        .alert-box { max-height: 450px; overflow-y: auto; scrollbar-width: thin; }
+        .alert-item {
+            padding: 12px; border-left: 4px solid; margin-bottom: 8px; background: rgba(255,255,255,0.05);
+            border-radius: 0 4px 4px 0; transition: 0.2s; color: var(--text-main);
+        }
+        .alert-item:hover { background: rgba(255,255,255,0.1); }
+        .alert-CRITICAL { border-color: #ff4d4d; color: #ffadad; }
+        .alert-HIGH { border-color: #ff9f43; color: #ffeaa7; }
+        .alert-MEDIUM { border-color: #feca57; color: #fff3cd; }
+
+        /* Table Fixes for Dark Mode */
+        table { color: var(--text-main) !important; }
+        .table {
+            color: var(--text-main) !important;
+            --bs-table-bg: transparent;
+            --bs-table-striped-bg: rgba(255,255,255,0.03);
+            --bs-table-hover-bg: rgba(255,255,255,0.05);
+        }
+        .table-dark {
+            --bs-table-bg: transparent;
+            --bs-table-color: var(--text-main);
+            --bs-table-border-color: #333;
+        }
+        .table-hover tbody tr:hover { color: white !important; background-color: rgba(255,255,255,0.05); }
+        .table-striped tbody tr:nth-of-type(odd) { color: var(--text-main) !important; }
+        .table-striped tbody tr:nth-of-type(even) { color: var(--text-main) !important; }
+        th { font-weight: 600; color: #c0c0c0 !important; border-bottom: 1px solid #444; }
+        td {
+            border-bottom: 1px solid #333;
+            vertical-align: middle;
+            color: var(--text-main) !important;
+        }
+        tbody { color: var(--text-main) !important; }
+
+        .btn-block-ip { padding: 2px 8px; font-size: 0.75rem; }
+
         .d-none { display: none !important; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg-dark); }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #666; }
+
+        /* Form Controls in Dark Mode */
+        .form-control, .form-select {
+            background-color: #0d1117;
+            border-color: #444;
+            color: var(--text-main);
+        }
+        .form-control:focus {
+            background-color: #0d1117;
+            border-color: var(--accent);
+            color: white;
+            box-shadow: 0 0 0 0.25rem rgba(15, 52, 96, 0.5);
+        }
+        .form-label { color: #c0c0c0; font-weight: 500; }
+        .form-text { color: #888; }
+
+        /* Button improvements */
+        .btn-outline-light:hover { color: var(--bg-dark); }
+        .btn-outline-info { color: #00d4ff; border-color: #00d4ff; }
+        .btn-outline-info:hover { background-color: #00d4ff; color: var(--bg-dark); }
+        .btn-outline-primary { color: #4dabf7; border-color: #4dabf7; }
+        .btn-outline-primary:hover { background-color: #4dabf7; color: var(--bg-dark); }
+
+        /* Text muted improvements */
+        .text-muted { color: #a0a0a0 !important; }
+        small.text-muted { color: #888 !important; }
+        p.text-muted { color: #a0a0a0 !important; }
     </style>
 </head>
 <body>
 
 <!-- Sidebar -->
 <div class="sidebar">
-    <h3>SentinelNet</h3>
-    <hr>
+    <h3><i class="fas fa-shield-alt"></i> SentinelNet</h3>
+    <p class="text-muted small">Real-Time Security Monitor</p>
+    <hr style="border-color: #444">
+
     <ul class="nav flex-column">
-        <li class="nav-item"><a onclick="showSection('dashboard')" class="nav-link">Dashboard</a></li>
-        <li class="nav-item"><a onclick="showSection('forensics')" class="nav-link">Forensics (Logs)</a></li>
-        <li class="nav-item"><a onclick="showSection('settings')" class="nav-link">Settings</a></li>
+        <li class="nav-item"><a onclick="showSection('dashboard')" class="nav-link active" id="nav-dashboard"><i class="fas fa-tachometer-alt"></i> Dashboard</a></li>
+        <li class="nav-item"><a onclick="showSection('blocked')" class="nav-link" id="nav-blocked"><i class="fas fa-ban"></i> Firewall Rules</a></li>
+        <li class="nav-item"><a onclick="showSection('forensics')" class="nav-link" id="nav-forensics"><i class="fas fa-file-medical-alt"></i> Forensics</a></li>
+        <li class="nav-item"><a onclick="showSection('settings')" class="nav-link" id="nav-settings"><i class="fas fa-sliders-h"></i> Configuration</a></li>
     </ul>
-    <div class="mt-5">
-        <small>Status: <span id="connStatus" class="text-success">Connected</span></small>
+
+    <div class="mt-auto" style="position: absolute; bottom: 20px;">
+        <small class="text-muted">System Status:</small><br>
+        <span id="connStatus" class="text-neon-green"><i class="fas fa-circle"></i> Online</span>
     </div>
 </div>
 
@@ -45,25 +141,49 @@
 
     <!-- 1. DASHBOARD SECTION -->
     <div id="dashboardSection">
-        <h2 class="mb-4">Network Intelligence Dashboard</h2>
-        <div class="row">
-            <div class="col-md-3"><div class="card p-3"><h6>Packets / Sec</h6><div id="ppsValue" class="metric-value text-primary">0</div></div></div>
-            <div class="col-md-3"><div class="card p-3"><h6>Bandwidth</h6><div id="bwValue" class="metric-value text-info">0</div></div></div>
-            <div class="col-md-3"><div class="card p-3"><h6>Active Flows</h6><div id="flowValue" class="metric-value text-success">0</div></div></div>
-            <div class="col-md-3"><div class="card p-3"><h6>System Status</h6><div id="statusValue" class="metric-value text-success">SECURE</div></div></div>
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2>Security Overview</h2>
+            <button class="btn btn-outline-light btn-sm" onclick="clearAlerts()"><i class="fas fa-broom"></i> Clear Alerts</button>
         </div>
 
-        <div class="row mt-4">
+        <!-- Top Metrics -->
+        <div class="row">
+            <div class="col-md-3"><div class="card p-3"><h6><i class="fas fa-bolt"></i> Packets / Sec</h6><div id="ppsValue" class="metric-value text-neon-blue">0</div></div></div>
+            <div class="col-md-3"><div class="card p-3"><h6><i class="fas fa-network-wired"></i> Bandwidth</h6><div id="bwValue" class="metric-value text-white">0</div></div></div>
+            <div class="col-md-3"><div class="card p-3"><h6><i class="fas fa-project-diagram"></i> Active Flows</h6><div id="flowValue" class="metric-value text-neon-green">0</div></div></div>
+            <div class="col-md-3"><div class="card p-3"><h6><i class="fas fa-shield-virus"></i> Threat Status</h6><div id="statusValue" class="metric-value text-neon-green">SECURE</div></div></div>
+        </div>
+
+        <div class="row mt-3">
+            <!-- Traffic Graph -->
             <div class="col-md-8">
-                <div class="card p-3"><h5>Real-Time Traffic Volume</h5><canvas id="trafficChart" height="100"></canvas></div>
-                <div class="row mt-3">
-                    <div class="col-md-6"><div class="card p-3"><h5>Protocol Distribution</h5><canvas id="protoChart" height="150"></canvas></div></div>
-                    <div class="col-md-6">
-                        <div class="card p-3">
-                            <h5>Top Active Flows</h5>
-                            <div class="table-responsive" style="max-height: 200px; overflow:auto">
-                                <table class="table table-sm text-small">
-                                    <thead><tr><th>Src</th><th>Dst</th><th>Proto</th><th>Pkts</th></tr></thead>
+                <div class="card p-3">
+                    <div class="d-flex justify-content-between">
+                        <h5>Network Traffic Volume</h5>
+                        <small class="text-muted">Last 60 Seconds</small>
+                    </div>
+                    <div style="height: 250px;"><canvas id="trafficChart"></canvas></div>
+                </div>
+
+                <div class="row">
+                    <!-- Protocol Dist -->
+                    <div class="col-md-5">
+                        <div class="card p-3" style="height: 340px;">
+                            <h5>Protocol Distribution</h5>
+                            <div class="d-flex justify-content-center align-items-center h-100">
+                                <canvas id="protoChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Live Flows Table -->
+                    <div class="col-md-7">
+                        <div class="card p-3" style="height: 340px;">
+                            <h5>Top Active Connections</h5>
+                            <div class="table-responsive">
+                                <table class="table table-dark table-hover table-sm small">
+                                    <!-- ADDED: 'Bytes' Column -->
+                                    <thead><tr><th>Src IP</th><th>Country</th><th>Dst IP</th><th>Proto</th><th>Bytes</th><th>Action</th></tr></thead>
                                     <tbody id="flowTableBody"></tbody>
                                 </table>
                             </div>
@@ -71,57 +191,70 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Alerts Feed -->
             <div class="col-md-4">
                 <div class="card p-3 h-100">
-                    <h5>Intrusion Alerts</h5>
+                    <h5><i class="fas fa-exclamation-triangle"></i> Real-Time IDS Alerts</h5>
                     <div id="alertContainer" class="alert-box">
-                        <div class="text-muted text-center mt-5">Listening for threats...</div>
+                        <div class="text-muted text-center mt-5 opacity-50">
+                            <i class="fas fa-check-circle fa-3x mb-3"></i><br>System Secure
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- 2. FORENSICS SECTION -->
+    <!-- 2. BLOCKED IPS SECTION -->
+    <div id="blockedSection" class="d-none">
+        <h2 class="mb-4">Active Firewall Rules</h2>
+        <div class="card p-4 col-md-8">
+            <p class="text-muted">IPs listed here are actively dropped by the inspection engine.</p>
+            <button class="btn btn-outline-info btn-sm mb-3" onclick="loadBlockedIps()">Refresh List</button>
+            <table class="table table-dark table-striped">
+                <thead><tr><th>Blocked IP Address</th><th>Action</th></tr></thead>
+                <tbody id="blockedTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 3. FORENSICS SECTION -->
     <div id="forensicsSection" class="d-none">
-        <h2 class="mb-4">Forensic Logs (PCAP Files)</h2>
+        <h2 class="mb-4">Forensic Evidence Logs</h2>
         <div class="card p-4">
-            <p>These files contain full packet captures generated during system activity. You can download them and open in Wireshark.</p>
-            <button class="btn btn-primary mb-3" onclick="loadForensics()">Refresh List</button>
-            <table class="table table-striped">
+            <p class="text-muted">Download full packet captures (.pcap) for analysis in Wireshark.</p>
+            <button class="btn btn-outline-primary btn-sm mb-3" onclick="loadForensics()">Refresh Files</button>
+            <table class="table table-dark table-striped">
                 <thead><tr><th>Filename</th><th>Action</th></tr></thead>
                 <tbody id="forensicsTableBody"></tbody>
             </table>
         </div>
     </div>
 
-    <!-- 3. SETTINGS SECTION -->
+    <!-- 4. SETTINGS SECTION -->
     <div id="settingsSection" class="d-none">
-        <h2 class="mb-4">System Configuration</h2>
+        <h2 class="mb-4">Detection Configuration</h2>
         <div class="card p-4 col-md-6">
             <form onsubmit="saveSettings(event)">
                 <div class="mb-3">
-                    <label class="form-label">SYN Flood Threshold (packets/sec)</label>
+                    <label class="form-label">SYN Flood Threshold (pps)</label>
                     <input type="number" id="synThreshold" class="form-control" required>
-                    <div class="form-text">Triggers alert if a single IP sends more SYN packets than this per second.</div>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">Port Scan Threshold (ports/sec)</label>
+                    <label class="form-label">Port Scan Threshold (unique ports/sec)</label>
                     <input type="number" id="scanThreshold" class="form-control" required>
-                    <div class="form-text">Triggers alert if a single IP accesses more unique ports than this per second.</div>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">Anomaly Z-Score Threshold</label>
+                    <label class="form-label">Anomaly Z-Score</label>
                     <input type="number" step="0.1" id="zThreshold" class="form-control" required>
-                    <div class="form-text">Statistical deviation required to trigger an anomaly alert (Standard Deviations).</div>
                 </div>
-                <button type="submit" class="btn btn-success">Save Configuration</button>
+                <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Configuration</button>
             </form>
         </div>
     </div>
 
 </div>
-
 <script src="app.js"></script>
 </body>
 </html>
