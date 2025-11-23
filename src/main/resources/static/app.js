@@ -2,55 +2,129 @@
 Chart.defaults.color = '#aaa';
 Chart.defaults.borderColor = '#333';
 
-// --- Traffic Line Chart ---
-const ctx = document.getElementById('trafficChart').getContext('2d');
-const trafficChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-        labels: [],
-        datasets: [{
-            label: 'Packets/Sec',
-            data: [],
-            borderColor: '#00d4ff',
-            backgroundColor: 'rgba(0, 212, 255, 0.1)',
-            borderWidth: 2,
-            tension: 0.4,
-            fill: true,
-            pointRadius: 0
-        }]
-    },
-    options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-            x: { grid: { display: false } },
-            y: { beginAtZero: true, grid: { color: '#222' } }
-        }
+// Helper to safely get context
+function getChartCtx(id) {
+    const el = document.getElementById(id);
+    if (el) {
+        return el.getContext('2d');
     }
-});
+    console.warn(`Chart element MISSING: ${id} - Check dashboard.html`);
+    return null;
+}
+
+// --- Traffic Line Chart ---
+let trafficChart;
+const trafficCtx = getChartCtx('trafficChart');
+if (trafficCtx) {
+    trafficChart = new Chart(trafficCtx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Packets/Sec',
+                data: [],
+                borderColor: '#00d4ff',
+                backgroundColor: 'rgba(0, 212, 255, 0.1)',
+                borderWidth: 2,
+                tension: 0.4,
+                fill: true,
+                pointRadius: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { grid: { display: false } },
+                y: { beginAtZero: true, grid: { color: '#222' } }
+            }
+        }
+    });
+}
 
 // --- Protocol Doughnut Chart ---
-const protoCtx = document.getElementById('protoChart').getContext('2d');
-const protoChart = new Chart(protoCtx, {
-    type: 'doughnut',
-    data: {
-        labels: ['TCP', 'UDP', 'ICMP'],
-        datasets: [{
-            data: [1, 1, 1],
-            backgroundColor: ['#00ff88', '#ff9f43', '#ff4d4d'],
-            borderWidth: 0
-        }]
-    },
-    options: {
-        cutout: '75%',
-        plugins: { legend: { position: 'bottom', labels: { usePointStyle: true } } }
-    }
-});
+let protoChart;
+const protoCtx = getChartCtx('protoChart');
+if (protoCtx) {
+    protoChart = new Chart(protoCtx, {
+        type: 'doughnut',
+        data: {
+            labels: ['TCP', 'UDP', 'ICMP'],
+            datasets: [{
+                data: [1, 1, 1],
+                backgroundColor: ['#00ff88', '#ff9f43', '#ff4d4d'],
+                borderWidth: 0
+            }]
+        },
+        options: {
+            cutout: '75%',
+            plugins: { legend: { position: 'bottom', labels: { usePointStyle: true } } }
+        }
+    });
+}
+
+// --- Top Ports Bar Chart (Fixed) ---
+let portChart;
+const portCtx = getChartCtx('portChart');
+if (portCtx) {
+    portChart = new Chart(portCtx, {
+        type: 'bar',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Packets',
+                data: [],
+                backgroundColor: '#e94560',
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                y: { beginAtZero: true, grid: { color: '#222' } },
+                x: { grid: { display: false } }
+            }
+        }
+    });
+}
+
+// --- Alert Timeline Chart (Fixed) ---
+let alertChart;
+const alertCtx = getChartCtx('alertChart');
+if (alertCtx) {
+    alertChart = new Chart(alertCtx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Alerts',
+                data: [],
+                borderColor: '#ff9f43',
+                backgroundColor: 'rgba(255, 159, 67, 0.1)',
+                borderWidth: 2,
+                tension: 0.1,
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                y: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: '#222' } },
+                x: { grid: { display: false } }
+            }
+        }
+    });
+}
 
 // --- WebSocket & Logic ---
 let stompClient = null;
-let ipCache = {}; // Cache country codes to avoid API spam
+let ipCache = {};
+let alertCountBuffer = 0;
 
 function connect() {
     const socket = new SockJS('/ws-sentinel');
@@ -58,42 +132,81 @@ function connect() {
     stompClient.debug = null;
 
     stompClient.connect({}, function (frame) {
-        document.getElementById('connStatus').innerHTML = '<i class="fas fa-circle"></i> Online';
+        if(document.getElementById('connStatus')) {
+            document.getElementById('connStatus').innerHTML = '<i class="fas fa-circle"></i> Online';
+        }
+        console.log("WebSocket Connected");
 
         stompClient.subscribe('/topic/stats', function (data) {
             updateDashboard(JSON.parse(data.body));
         });
 
         stompClient.subscribe('/topic/alerts', function (data) {
-            showAlert(JSON.parse(data.body));
+            const alert = JSON.parse(data.body);
+            showAlert(alert);
+            alertCountBuffer++;
+        });
+
+        stompClient.subscribe('/topic/flows', function (data) {
+            updateFlowTable(JSON.parse(data.body));
         });
 
         fetchHistory();
+        fetch('/api/flows').then(r => r.json()).then(flows => updateFlowTable(flows));
     });
 }
 
 function updateDashboard(stats) {
-    document.getElementById('ppsValue').innerText = stats.pps;
-    document.getElementById('bwValue').innerText = formatBytes(stats.bandwidth); // This is total bandwidth
-    document.getElementById('flowValue').innerText = stats.activeFlows;
+    if(document.getElementById('ppsValue')) document.getElementById('ppsValue').innerText = stats.pps;
+    if(document.getElementById('bwValue')) document.getElementById('bwValue').innerText = formatBytes(stats.bandwidth);
+    if(document.getElementById('flowValue')) document.getElementById('flowValue').innerText = stats.activeFlows;
 
-    // Update Chart
     const now = new Date().toLocaleTimeString();
-    if (trafficChart.data.labels.length > 20) {
-        trafficChart.data.labels.shift();
-        trafficChart.data.datasets[0].data.shift();
-    }
-    trafficChart.data.labels.push(now);
-    trafficChart.data.datasets[0].data.push(stats.pps);
-    trafficChart.update();
 
-    // Update Pie
-    protoChart.data.datasets[0].data = [stats.tcp, stats.udp, stats.icmp];
-    protoChart.update();
+    // 1. Update Traffic Chart
+    if (trafficChart) {
+        if (trafficChart.data.labels.length > 20) {
+            trafficChart.data.labels.shift();
+            trafficChart.data.datasets[0].data.shift();
+        }
+        trafficChart.data.labels.push(now);
+        trafficChart.data.datasets[0].data.push(stats.pps);
+        trafficChart.update();
+    }
+
+    // 2. Update Protocol Chart
+    if (protoChart) {
+        protoChart.data.datasets[0].data = [stats.tcp, stats.udp, stats.icmp];
+        protoChart.update();
+    }
+
+    // 3. Update Port Chart
+    // FIX: Update chart even if data is empty so grid lines persist
+    if (portChart) {
+        if (stats.topPorts && Object.keys(stats.topPorts).length > 0) {
+            portChart.data.labels = Object.keys(stats.topPorts);
+            portChart.data.datasets[0].data = Object.values(stats.topPorts);
+        }
+        portChart.update();
+    }
+
+    // 4. Update Alert Chart
+    if (alertChart) {
+        if (alertChart.data.labels.length > 20) {
+            alertChart.data.labels.shift();
+            alertChart.data.datasets[0].data.shift();
+        }
+        alertChart.data.labels.push(now);
+        alertChart.data.datasets[0].data.push(alertCountBuffer);
+        alertChart.update();
+        alertCountBuffer = 0; // Reset bucket
+    }
 }
 
 function showAlert(alert) {
     const container = document.getElementById('alertContainer');
+    if (!container) return;
+
     if(container.innerText.includes("System Secure")) container.innerHTML = "";
 
     const div = document.createElement('div');
@@ -108,12 +221,10 @@ function showAlert(alert) {
 
     container.insertBefore(div, container.firstChild);
 
-    // Visual Alarm
     const threatLabel = document.getElementById('statusValue');
-    if(alert.severity === 'CRITICAL') {
+    if(threatLabel && alert.severity === 'CRITICAL') {
         threatLabel.innerText = "CRITICAL THREAT";
         threatLabel.className = "metric-value text-neon-red";
-        // Flash effect
         document.body.style.boxShadow = "inset 0 0 50px rgba(255,0,0,0.2)";
         setTimeout(() => {
              threatLabel.innerText = "SECURE";
@@ -123,42 +234,34 @@ function showAlert(alert) {
     }
 }
 
-function fetchFlows() {
-    fetch('/api/flows').then(r => r.json()).then(flows => {
-        const tbody = document.getElementById('flowTableBody');
-        tbody.innerHTML = '';
+function updateFlowTable(flows) {
+    const tbody = document.getElementById('flowTableBody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
 
-        // Sort by packet count desc
-        flows.sort((a, b) => b.packetCount - a.packetCount);
+    flows.forEach(flow => {
+        let country = ipCache[flow.srcIp] || '...';
+        if (!ipCache[flow.srcIp] && !isPrivateIp(flow.srcIp)) {
+            fetch(`http://ip-api.com/json/${flow.srcIp}?fields=countryCode`)
+                .then(r => r.json())
+                .then(data => {
+                    ipCache[flow.srcIp] = data.countryCode || 'UNK';
+                });
+        } else if (isPrivateIp(flow.srcIp)) {
+             ipCache[flow.srcIp] = 'LAN';
+        }
 
-        flows.slice(0, 6).forEach(flow => {
-            // Resolve Country (Async)
-            let country = ipCache[flow.srcIp] || '...';
-            if (!ipCache[flow.srcIp] && !isPrivateIp(flow.srcIp)) {
-                fetch(`http://ip-api.com/json/${flow.srcIp}?fields=countryCode`)
-                    .then(r => r.json())
-                    .then(data => {
-                        ipCache[flow.srcIp] = data.countryCode || 'UNK';
-                    });
-            } else if (isPrivateIp(flow.srcIp)) {
-                 ipCache[flow.srcIp] = 'LAN';
-            }
+        let formattedBytes = formatBytes(flow.bytes * 8);
 
-            // ADDED: Bytes column display using formatBytes()
-            // Note: flow.bytes is total bytes transferred in this flow
-            // If you want bits, multiply by 8. formatBytes handles B/KB/MB.
-            let formattedBytes = formatBytes(flow.bytes * 8);
-
-            tbody.innerHTML += `
-                <tr>
-                    <td class="text-neon-blue">${flow.srcIp}</td>
-                    <td><span class="badge bg-secondary">${ipCache[flow.srcIp] || 'LAN'}</span></td>
-                    <td>${flow.dstIp}</td>
-                    <td>${flow.protocol}</td>
-                    <td>${formattedBytes}</td>
-                    <td><button class="btn btn-danger btn-block-ip" onclick="blockIp('${flow.srcIp}')"><i class="fas fa-ban"></i></button></td>
-                </tr>`;
-        });
+        tbody.innerHTML += `
+            <tr>
+                <td class="text-neon-blue">${flow.srcIp}</td>
+                <td><span class="badge bg-secondary">${ipCache[flow.srcIp] || 'LAN'}</span></td>
+                <td>${flow.dstIp}</td>
+                <td>${flow.protocol}</td>
+                <td>${formattedBytes}</td>
+                <td><button class="btn btn-danger btn-block-ip" onclick="blockIp('${flow.srcIp}')"><i class="fas fa-ban"></i></button></td>
+            </tr>`;
     });
 }
 
@@ -166,7 +269,6 @@ function isPrivateIp(ip) {
     return ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("127.") || ip.startsWith("172.");
 }
 
-// --- Blocking Actions ---
 function blockIp(ip) {
     if(!confirm(`Block traffic from ${ip}?`)) return;
     fetch(`/api/block/${ip}`, { method: 'POST' })
@@ -184,8 +286,10 @@ function unblockIp(ip) {
 }
 
 function loadBlockedIps() {
+    const tbody = document.getElementById('blockedTableBody');
+    if (!tbody) return;
+
     fetch('/api/blocked').then(r => r.json()).then(ips => {
-        const tbody = document.getElementById('blockedTableBody');
         tbody.innerHTML = '';
         ips.forEach(ip => {
             tbody.innerHTML += `
@@ -197,31 +301,29 @@ function loadBlockedIps() {
     });
 }
 
-// --- Utility ---
-// Adjusted to handle bits (b) vs Bytes (B) contextually if needed
-// Currently assumes input is bits/sec for bandwidth, but flows usually track Bytes.
-// The code in updateDashboard passes bits/sec. The code in fetchFlows passes bits (Bytes*8).
 function formatBytes(bits) {
     if(bits === 0) return '0 b';
     const k = 1024;
     const i = Math.floor(Math.log(bits) / Math.log(k));
-    // Use 'b' for bits, 'Kb' for Kilobits etc. or 'B' if you prefer Bytes.
-    // Standard network convention is often bits/sec.
     const sizes = ['b', 'Kb', 'Mb', 'Gb', 'Tb'];
     return parseFloat((bits / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
 function clearAlerts() {
-    document.getElementById('alertContainer').innerHTML = '<div class="text-muted text-center mt-5 opacity-50"><i class="fas fa-check-circle fa-3x mb-3"></i><br>System Secure</div>';
+    const container = document.getElementById('alertContainer');
+    if (container) {
+        container.innerHTML = '<div class="text-muted text-center mt-5 opacity-50"><i class="fas fa-check-circle fa-3x mb-3"></i><br>System Secure</div>';
+    }
 }
 
-// --- Navigation ---
 function showSection(sectionId) {
     document.querySelectorAll('.main-content > div').forEach(div => div.classList.add('d-none'));
-    document.getElementById(sectionId + 'Section').classList.remove('d-none');
+    const section = document.getElementById(sectionId + 'Section');
+    if (section) section.classList.remove('d-none');
 
     document.querySelectorAll('.nav-link').forEach(a => a.classList.remove('active'));
-    document.getElementById('nav-' + sectionId).classList.add('active');
+    const nav = document.getElementById('nav-' + sectionId);
+    if (nav) nav.classList.add('active');
 
     if(sectionId === 'forensics') loadForensics();
     if(sectionId === 'settings') loadSettings();
@@ -229,8 +331,10 @@ function showSection(sectionId) {
 }
 
 function loadForensics() {
+    const tbody = document.getElementById('forensicsTableBody');
+    if (!tbody) return;
+
     fetch('/api/forensics').then(r => r.json()).then(files => {
-        const tbody = document.getElementById('forensicsTableBody');
         tbody.innerHTML = '';
         files.forEach(file => {
             tbody.innerHTML += `<tr><td>${file}</td><td>PCAP</td><td><a href="/api/forensics/download/${file}" class="btn btn-sm btn-outline-primary">Download</a></td></tr>`;
@@ -239,9 +343,9 @@ function loadForensics() {
 }
 function loadSettings() {
     fetch('/api/settings').then(r => r.json()).then(settings => {
-        document.getElementById('synThreshold').value = settings.synFloodThreshold;
-        document.getElementById('scanThreshold').value = settings.portScanThreshold;
-        document.getElementById('zThreshold').value = settings.zScoreThreshold;
+        if(document.getElementById('synThreshold')) document.getElementById('synThreshold').value = settings.synFloodThreshold;
+        if(document.getElementById('scanThreshold')) document.getElementById('scanThreshold').value = settings.portScanThreshold;
+        if(document.getElementById('zThreshold')) document.getElementById('zThreshold').value = settings.zScoreThreshold;
     });
 }
 function saveSettings(event) {
@@ -260,4 +364,3 @@ function fetchHistory() {
 }
 
 connect();
-setInterval(fetchFlows, 2000);

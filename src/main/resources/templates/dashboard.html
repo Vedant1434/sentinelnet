@@ -6,7 +6,9 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- WebSockets -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
 
@@ -43,7 +45,7 @@
         .text-neon-blue { color: #00d4ff; }
         .text-neon-red { color: #ff4d4d; text-shadow: 0 0 8px rgba(255, 77, 77, 0.6); }
 
-        .alert-box { max-height: 450px; overflow-y: auto; scrollbar-width: thin; }
+        .alert-box { max-height: 700px; overflow-y: auto; scrollbar-width: thin; }
         .alert-item {
             padding: 12px; border-left: 4px solid; margin-bottom: 8px; background: rgba(255,255,255,0.05);
             border-radius: 0 4px 4px 0; transition: 0.2s; color: var(--text-main);
@@ -155,14 +157,31 @@
         </div>
 
         <div class="row mt-3">
-            <!-- Traffic Graph -->
+            <!-- Left Column: Charts -->
             <div class="col-md-8">
+                <!-- Traffic Graph -->
                 <div class="card p-3">
                     <div class="d-flex justify-content-between">
                         <h5>Network Traffic Volume</h5>
                         <small class="text-muted">Last 60 Seconds</small>
                     </div>
-                    <div style="height: 250px;"><canvas id="trafficChart"></canvas></div>
+                    <div style="height: 200px;"><canvas id="trafficChart"></canvas></div>
+                </div>
+
+                <!-- NEW CHARTS ROW: PORTS AND ALERTS -->
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="card p-3">
+                            <h5>Top Targeted Ports</h5>
+                            <div style="height: 200px;"><canvas id="portChart"></canvas></div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card p-3">
+                            <h5>Alerts Timeline</h5>
+                            <div style="height: 200px;"><canvas id="alertChart"></canvas></div>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="row">
@@ -182,7 +201,6 @@
                             <h5>Top Active Connections</h5>
                             <div class="table-responsive">
                                 <table class="table table-dark table-hover table-sm small">
-                                    <!-- ADDED: 'Bytes' Column -->
                                     <thead><tr><th>Src IP</th><th>Country</th><th>Dst IP</th><th>Proto</th><th>Bytes</th><th>Action</th></tr></thead>
                                     <tbody id="flowTableBody"></tbody>
                                 </table>
@@ -192,7 +210,7 @@
                 </div>
             </div>
 
-            <!-- Alerts Feed -->
+            <!-- Right Column: Alerts Feed -->
             <div class="col-md-4">
                 <div class="card p-3 h-100">
                     <h5><i class="fas fa-exclamation-triangle"></i> Real-Time IDS Alerts</h5>
@@ -224,7 +242,10 @@
         <h2 class="mb-4">Forensic Evidence Logs</h2>
         <div class="card p-4">
             <p class="text-muted">Download full packet captures (.pcap) for analysis in Wireshark.</p>
-            <button class="btn btn-outline-primary btn-sm mb-3" onclick="loadForensics()">Refresh Files</button>
+            <div class="d-flex gap-2 mb-3">
+                <button class="btn btn-outline-primary btn-sm" onclick="loadForensics()">Refresh Files</button>
+                <a href="/api/forensics/audit-log" class="btn btn-outline-warning btn-sm">Download Audit Log</a>
+            </div>
             <table class="table table-dark table-striped">
                 <thead><tr><th>Filename</th><th>Action</th></tr></thead>
                 <tbody id="forensicsTableBody"></tbody>

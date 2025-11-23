@@ -1,0 +1,42 @@
+[
+  {
+    "id": "SIG-1001",
+    "name": "High Volume Web Traffic",
+    "description": "Unusually large data transfer on HTTP port",
+    "severity": "MEDIUM",
+    "protocol": "TCP",
+    "targetPort": 80,
+    "minPacketCount": 1000,
+    "minBytes": 500000
+  },
+  {
+    "id": "SIG-1002",
+    "name": "SSH Potential Brute Force",
+    "description": "High packet count on SSH port within short duration",
+    "severity": "HIGH",
+    "protocol": "TCP",
+    "targetPort": 22,
+    "minPacketCount": 50,
+    "minSynCount": 20
+  },
+  {
+    "id": "SIG-1003",
+    "name": "Suspicious Telnet Activity",
+    "description": "Any traffic detected on legacy Telnet port",
+    "severity": "HIGH",
+    "protocol": "TCP",
+    "targetPort": 23,
+    "minPacketCount": 1,
+    "minBytes": 0
+  },
+  {
+    "id": "SIG-2001",
+    "name": "DNS High Volume Query",
+    "description": "Excessive DNS queries from a single source",
+    "severity": "MEDIUM",
+    "protocol": "UDP",
+    "targetPort": 53,
+    "minPacketCount": 200,
+    "minBytes": 0
+  }
+]
