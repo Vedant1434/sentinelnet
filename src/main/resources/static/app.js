@@ -550,8 +550,17 @@ function saveSettings(event) {
         .then(r => showToast("Success", "Settings Saved"));
 }
 
+function exportAlerts() {
+    window.location.href = '/api/alerts/export/csv';
+}
+
+function exportFlows() {
+    window.location.href = '/api/flows/export/json';
+}
+
 function fetchHistory() {
     fetch('/api/alerts/history').then(r => r.json()).then(alerts => alerts.forEach(a => showAlert(a)));
 }
 
+fetchHistory();
 connect();

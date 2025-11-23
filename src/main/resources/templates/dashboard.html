@@ -8,7 +8,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
-    <!-- NEW: SweetAlert2 for beautiful popups -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
     <style>
@@ -112,7 +111,6 @@
         small.text-muted { color: #888 !important; }
         p.text-muted { color: #a0a0a0 !important; }
 
-        /* Toast Notification */
         .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 1050; }
         .toast { background-color: var(--bg-panel); border: 1px solid var(--accent); color: var(--text-main); }
         .toast-header { background-color: var(--accent); color: white; border-bottom: 1px solid #333; }
@@ -120,10 +118,8 @@
 </head>
 <body>
 
-<!-- Toast Container -->
 <div class="toast-container" id="toastContainer"></div>
 
-<!-- Sidebar -->
 <div class="sidebar">
     <h3><i class="fas fa-shield-alt"></i> SentinelNet</h3>
     <p class="text-muted small">Real-Time Security Monitor</p>
@@ -142,17 +138,17 @@
     </div>
 </div>
 
-<!-- Main Content -->
 <div class="main-content">
 
-    <!-- 1. DASHBOARD SECTION -->
     <div id="dashboardSection">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h2>Security Overview</h2>
-            <button class="btn btn-outline-light btn-sm" onclick="clearAlerts()"><i class="fas fa-broom"></i> Clear Alerts</button>
+            <div class="d-flex gap-2">
+                <button class="btn btn-outline-info btn-sm" onclick="exportAlerts()"><i class="fas fa-download"></i> Export Alerts</button>
+                <button class="btn btn-outline-light btn-sm" onclick="clearAlerts()"><i class="fas fa-broom"></i> Clear Alerts</button>
+            </div>
         </div>
 
-        <!-- NEW: CAPTURE CONTROLS -->
         <div class="card p-3 mb-3">
             <div class="d-flex justify-content-between align-items-center">
                 <div class="d-flex gap-3 align-items-center">
@@ -171,7 +167,6 @@
             </div>
         </div>
 
-        <!-- Top Metrics -->
         <div class="row">
             <div class="col-md-3"><div class="card p-3"><h6><i class="fas fa-bolt"></i> Packets / Sec</h6><div id="ppsValue" class="metric-value text-neon-blue">0</div></div></div>
             <div class="col-md-3"><div class="card p-3"><h6><i class="fas fa-network-wired"></i> Bandwidth</h6><div id="bwValue" class="metric-value text-white">0</div></div></div>
@@ -180,9 +175,7 @@
         </div>
 
         <div class="row mt-3">
-            <!-- Left Column: Charts -->
             <div class="col-md-8">
-                <!-- Traffic Graph -->
                 <div class="card p-3">
                     <div class="d-flex justify-content-between">
                         <h5>Network Traffic Volume</h5>
@@ -191,7 +184,6 @@
                     <div style="height: 200px;"><canvas id="trafficChart"></canvas></div>
                 </div>
 
-                <!-- NEW CHARTS ROW: PORTS AND ALERTS -->
                 <div class="row">
                     <div class="col-md-6">
                         <div class="card p-3">
@@ -208,7 +200,6 @@
                 </div>
 
                 <div class="row">
-                    <!-- Protocol Dist -->
                     <div class="col-md-5">
                         <div class="card p-3" style="height: 340px;">
                             <h5>Protocol Distribution</h5>
@@ -218,10 +209,12 @@
                         </div>
                     </div>
 
-                    <!-- Live Flows Table -->
                     <div class="col-md-7">
                         <div class="card p-3" style="height: 340px;">
-                            <h5>Top Active Connections</h5>
+                            <div class="d-flex justify-content-between">
+                                <h5>Top Active Connections</h5>
+                                <button class="btn btn-outline-info btn-sm py-0" style="font-size: 0.7rem;" onclick="exportFlows()"><i class="fas fa-file-export"></i> JSON</button>
+                            </div>
                             <div class="table-responsive">
                                 <table class="table table-dark table-hover table-sm small">
                                     <thead><tr><th>Src IP</th><th>Country</th><th>Dst IP</th><th>Proto</th><th>Bytes</th><th>Action</th></tr></thead>
@@ -233,7 +226,6 @@
                 </div>
             </div>
 
-            <!-- Right Column: Alerts Feed -->
             <div class="col-md-4">
                 <div class="card p-3 h-100">
                     <h5><i class="fas fa-exclamation-triangle"></i> Real-Time IDS Alerts</h5>
@@ -247,7 +239,6 @@
         </div>
     </div>
 
-    <!-- 2. BLOCKED IPS SECTION -->
     <div id="blockedSection" class="d-none">
         <h2 class="mb-4">Active Firewall Rules</h2>
         <div class="card p-4 col-md-8">
@@ -260,7 +251,6 @@
         </div>
     </div>
 
-    <!-- 3. FORENSICS SECTION -->
     <div id="forensicsSection" class="d-none">
         <h2 class="mb-4">Forensic Evidence Logs</h2>
         <div class="card p-4">
@@ -276,7 +266,6 @@
         </div>
     </div>
 
-    <!-- 4. SETTINGS SECTION -->
     <div id="settingsSection" class="d-none">
         <h2 class="mb-4">Detection Configuration</h2>
         <div class="card p-4 col-md-6">
