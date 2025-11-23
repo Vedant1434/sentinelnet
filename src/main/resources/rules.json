@@ -7,17 +7,19 @@
     "protocol": "TCP",
     "targetPort": 80,
     "minPacketCount": 1000,
-    "minBytes": 500000
+    "minBytes": 500000,
+    "action": "ALERT"
   },
   {
     "id": "SIG-1002",
     "name": "SSH Potential Brute Force",
     "description": "High packet count on SSH port within short duration",
-    "severity": "HIGH",
+    "severity": "CRITICAL",
     "protocol": "TCP",
     "targetPort": 22,
     "minPacketCount": 50,
-    "minSynCount": 20
+    "minSynCount": 20,
+    "action": "BLOCK"
   },
   {
     "id": "SIG-1003",
@@ -27,7 +29,8 @@
     "protocol": "TCP",
     "targetPort": 23,
     "minPacketCount": 1,
-    "minBytes": 0
+    "minBytes": 0,
+    "action": "BLOCK"
   },
   {
     "id": "SIG-2001",
@@ -37,6 +40,7 @@
     "protocol": "UDP",
     "targetPort": 53,
     "minPacketCount": 200,
-    "minBytes": 0
+    "minBytes": 0,
+    "action": "ALERT"
   }
 ]

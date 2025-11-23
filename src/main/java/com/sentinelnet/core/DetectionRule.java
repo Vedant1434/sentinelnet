@@ -16,9 +16,13 @@ public class DetectionRule {
     private String description;
     private String severity; // LOW, MEDIUM, HIGH, CRITICAL
 
-    // Matching Criteria (If value is -1 or null, it is ignored)
-    private String protocol;      // TCP, UDP, ICMP
-    private int targetPort = -1;  // e.g., 80, 443
+    // NEW: Action to take when rule matches
+    // Values: ALERT, BLOCK, LOG
+    private String action = "ALERT";
+
+    // Matching Criteria
+    private String protocol;
+    private int targetPort = -1;
 
     // Thresholds
     private long minPacketCount = -1;
@@ -26,12 +30,8 @@ public class DetectionRule {
     private int minSynCount = -1;
 
     public boolean matches(SentinelNetService.FlowRecord flow) {
-        // 1. Check Protocol
-        if (protocol != null && !protocol.equalsIgnoreCase(flow.getProtocol())) {
-            return false;
-        }
+        if (protocol != null && !protocol.equalsIgnoreCase(flow.getProtocol())) return false;
 
-        // 2. Check Port (Check both source and dest, usually dest for attacks)
         if (targetPort != -1) {
             boolean portMatch = false;
             for (Integer port : flow.getUniquePorts()) {
@@ -43,7 +43,6 @@ public class DetectionRule {
             if (!portMatch) return false;
         }
 
-        // 3. Check Thresholds
         if (minPacketCount != -1 && flow.getPacketCount() < minPacketCount) return false;
         if (minBytes != -1 && flow.getBytes() < minBytes) return false;
         if (minSynCount != -1 && flow.getSynCount() < minSynCount) return false;

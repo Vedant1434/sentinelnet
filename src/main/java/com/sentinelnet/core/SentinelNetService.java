@@ -38,27 +38,22 @@ public class SentinelNetService {
     private final ForensicLogger forensicLogger;
     private final DpiService dpiService;
 
-    // --- Pcap Resources ---
     private PcapHandle handle;
     private PcapDumper dumper;
     private volatile boolean capturing = false;
     private String currentBpfFilter = "";
 
-    // --- Data Structures ---
     private final ConcurrentHashMap<String, FlowRecord> flowTable = new ConcurrentHashMap<>();
     private final BlockingQueue<Packet> packetQueue = new ArrayBlockingQueue<>(50000);
     private final BlockingQueue<FlowRecord> detectionQueue = new ArrayBlockingQueue<>(50000);
 
-    // --- Thread Pools ---
     private final ExecutorService captureExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "Sentinel-Capture"));
     private final ExecutorService analysisExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "Sentinel-Analysis"));
     private final ExecutorService detectionExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "Sentinel-Detect"));
 
-    // --- Active Defense ---
     private final Set<String> blockedIps = ConcurrentHashMap.newKeySet();
     private static final String LOG_DIR = "forensic_logs";
 
-    // --- Statistics & ML ---
     private final DescriptiveStatistics packetRateStats = new DescriptiveStatistics(100);
     private final DescriptiveStatistics flowSizeStats = new DescriptiveStatistics(1000);
 
@@ -67,12 +62,10 @@ public class SentinelNetService {
     private final AtomicLong udpCount = new AtomicLong(0);
     private final AtomicLong icmpCount = new AtomicLong(0);
 
-    // --- Configuration ---
     private int synFloodThreshold = 100;
     private int portScanThreshold = 50;
     private double zScoreThreshold = 3.5;
 
-    // --- Flow Timeouts ---
     private static final long FLOW_IDLE_TIMEOUT_MS = 30_000;
     private static final long FLOW_ACTIVE_TIMEOUT_MS = 300_000;
 
@@ -95,8 +88,6 @@ public class SentinelNetService {
     @PostConstruct
     public void init() { startCapture(); }
 
-    // --- CONTROL METHODS (Updated for Step 11) ---
-
     public synchronized void startCapture() {
         if (capturing) {
             log.info("Capture already running.");
@@ -104,8 +95,6 @@ public class SentinelNetService {
         }
         capturing = true;
         log.info("Starting Capture Engine...");
-
-        // Submitting tasks to existing executors
         captureExecutor.submit(this::captureLoop);
         analysisExecutor.submit(this::analysisLoop);
         detectionExecutor.submit(this::detectionLoop);
@@ -115,27 +104,14 @@ public class SentinelNetService {
         if (!capturing) return;
         log.info("Stopping Capture Engine...");
         capturing = false;
-
-        // Closing the handle throws an exception in captureLoop, breaking the loop
         if (handle != null && handle.isOpen()) {
-            try {
-                handle.close();
-            } catch (Exception e) {
-                log.error("Error closing handle", e);
-            }
+            try { handle.close(); } catch (Exception e) { log.error("Error closing handle", e); }
         }
-        if (dumper != null && dumper.isOpen()) {
-            dumper.close();
-        }
+        if (dumper != null && dumper.isOpen()) dumper.close();
     }
 
-    public boolean isCapturing() {
-        return capturing;
-    }
-
-    public String getCurrentFilter() {
-        return currentBpfFilter;
-    }
+    public boolean isCapturing() { return capturing; }
+    public String getCurrentFilter() { return currentBpfFilter; }
 
     public void setBpfFilter(String filterExpression) {
         this.currentBpfFilter = filterExpression;
@@ -157,9 +133,7 @@ public class SentinelNetService {
         detectionExecutor.shutdownNow();
     }
 
-    // ---------------------------------------------------------------------------
-    // 1. CAPTURE LOOP
-    // ---------------------------------------------------------------------------
+    // --- CAPTURE LOOP ---
     private void captureLoop() {
         try {
             PcapNetworkInterface nif = autoSelectInterface();
@@ -169,14 +143,8 @@ public class SentinelNetService {
                 return;
             }
             log.info("Starting Capture on: {}", nif.getName());
-
-            // Increased buffer size for high throughput
             handle = nif.openLive(65536, PcapNetworkInterface.PromiscuousMode.PROMISCUOUS, 10);
-
-            if (!currentBpfFilter.isEmpty()) {
-                handle.setFilter(currentBpfFilter, BpfProgram.BpfCompileMode.OPTIMIZE);
-            }
-
+            if (!currentBpfFilter.isEmpty()) handle.setFilter(currentBpfFilter, BpfProgram.BpfCompileMode.OPTIMIZE);
             setupForensicLogging();
 
             while (capturing && handle.isOpen()) {
@@ -187,43 +155,28 @@ public class SentinelNetService {
                         if (!packetQueue.offer(packet)) log.warn("Queue Full - Dropping Packet");
                         currentPacketCount.incrementAndGet();
                     }
-                } catch (Exception e) {
-                    // Pcap4j throws exception when handle is closed asynchronously
-                    if (capturing) log.warn("Capture Packet Error: {}", e.getMessage());
-                }
+                } catch (Exception e) { if (capturing) log.warn("Capture Packet Error: {}", e.getMessage()); }
             }
-        } catch (Exception e) {
-            log.error("Fatal Capture Error", e);
-            capturing = false;
-        }
+        } catch (Exception e) { log.error("Fatal Capture Error", e); capturing = false; }
         log.info("Capture Loop Stopped");
     }
 
-    // ---------------------------------------------------------------------------
-    // 2. ANALYSIS LOOP
-    // ---------------------------------------------------------------------------
+    // --- ANALYSIS LOOP ---
     private void analysisLoop() {
         while (capturing) {
             try {
-                // Poll with timeout to allow checking 'capturing' flag periodically
                 Packet packet = packetQueue.poll(1, TimeUnit.SECONDS);
-                if (packet != null) {
-                    processPacket(packet);
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            } catch (Exception e) { }
+                if (packet != null) processPacket(packet);
+            } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+            catch (Exception e) { }
         }
         log.info("Analysis Loop Stopped");
     }
 
     private void processPacket(Packet packet) {
-        // --- 1. HANDLE ARP ---
         ArpPacket arpPacket = packet.get(ArpPacket.class);
         if (arpPacket != null) return;
 
-        // --- 2. HANDLE IPV4 ---
         IpV4Packet ipV4Packet = packet.get(IpV4Packet.class);
         if (ipV4Packet == null) return;
 
@@ -263,7 +216,6 @@ public class SentinelNetService {
             }
         }
 
-        // --- 3. DPI INSPECTION ---
         String appInfo = null;
         if (payloadData != null && payloadData.length > 0) {
             appInfo = dpiService.inspect(payloadData, protocol, dstPort);
@@ -285,9 +237,7 @@ public class SentinelNetService {
         if (!detectionQueue.offer(flow)) { /* Drop if busy */ }
     }
 
-    // ---------------------------------------------------------------------------
-    // 3. DETECTION LOOP
-    // ---------------------------------------------------------------------------
+    // --- DETECTION LOOP ---
     private void detectionLoop() {
         while (capturing) {
             try {
@@ -297,10 +247,7 @@ public class SentinelNetService {
                     checkHeuristics(flow);
                     checkProtocolAnomalies(flow);
                 }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
+            } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
         }
         log.info("Detection Loop Stopped");
     }
@@ -311,6 +258,8 @@ public class SentinelNetService {
             DetectionRule rule = matchedRule.get();
             if (flow.getPacketCount() % 50 == 0) {
                 publishAlert("RULE MATCH: " + rule.getName(), rule.getDescription(), rule.getSeverity());
+                // NEW: Execute Rule Action
+                executeAutomatedAction(rule.getAction(), flow.getSrcIp());
             }
         }
     }
@@ -318,6 +267,7 @@ public class SentinelNetService {
     private void checkHeuristics(FlowRecord flow) {
         if (flow.getSynCount() > synFloodThreshold) {
             publishAlert("SYN FLOOD", "High SYN rate ("+flow.getSynCount()+") from " + flow.srcIp, "CRITICAL");
+            executeAutomatedAction("BLOCK", flow.getSrcIp()); // Auto-Block SYN Floods
             flow.setSynCount(0);
         }
         if (flow.getUniquePorts().size() > portScanThreshold) {
@@ -329,19 +279,24 @@ public class SentinelNetService {
     private void checkProtocolAnomalies(FlowRecord flow) {
         if (flow.getProtocol().equals("UDP") && flow.getUniquePorts().contains(53)) {
             if (flow.getMaxPayloadSize() > 200) {
-                publishAlert("DNS TUNNELING", "Suspiciously large DNS packet (" + flow.getMaxPayloadSize() + " bytes)", "HIGH");
-            }
-        }
-        if (flow.getProtocol().equals("ICMP")) {
-            if (flow.getBytes() > 10000 && flow.getPacketCount() > 50) {
-                publishAlert("ICMP FLOOD", "Large volume of ICMP traffic", "MEDIUM");
+                publishAlert("DNS TUNNELING", "Suspiciously large DNS packet", "HIGH");
             }
         }
     }
 
-    // ---------------------------------------------------------------------------
-    // 4. STATS, HOUSEKEEPING & PERSISTENCE
-    // ---------------------------------------------------------------------------
+    // --- NEW: AUTOMATED ACTIONS ---
+    private void executeAutomatedAction(String action, String ip) {
+        if (action == null || action.equalsIgnoreCase("ALERT")) return;
+
+        if (action.equalsIgnoreCase("BLOCK")) {
+            if (!blockedIps.contains(ip)) {
+                blockIp(ip);
+                publishAlert("AUTO-BLOCK", "Active Defense System blocked IP: " + ip, "INFO");
+            }
+        }
+    }
+
+    // --- STATS & HOUSEKEEPING ---
     @Scheduled(fixedRate = 5000)
     public void manageFlowLifecycle() {
         long now = System.currentTimeMillis();
@@ -349,7 +304,6 @@ public class SentinelNetService {
             FlowRecord f = entry.getValue();
             boolean expired = (now - f.getLastSeen() > FLOW_IDLE_TIMEOUT_MS) ||
                     (now - f.getStartTime() > FLOW_ACTIVE_TIMEOUT_MS);
-
             if (expired) {
                 try {
                     PersistentFlow dbFlow = new PersistentFlow(
@@ -358,20 +312,13 @@ public class SentinelNetService {
                             f.getStartTime(), f.getLastSeen()
                     );
                     flowRepository.save(dbFlow);
-
                     if (f.getBytes() > 1000000 || f.getPacketCount() > 1000) {
                         Map<String, Object> details = new HashMap<>();
                         details.put("src", f.getSrcIp());
-                        details.put("dst", f.getDstIp());
-                        details.put("proto", f.getProtocol());
                         details.put("metadata", f.getMetadata());
-                        details.put("bytes", f.getBytes());
-                        details.put("duration", f.getLastSeen() - f.getStartTime());
                         forensicLogger.logEvent("FLOW", "FLOW_EXPIRY", "INFO", details);
                     }
-                } catch (Exception e) {
-                    log.error("Error saving expired flow", e);
-                }
+                } catch (Exception e) { log.error("Error saving expired flow", e); }
             }
             return expired;
         });
@@ -385,7 +332,7 @@ public class SentinelNetService {
         if (packetRateStats.getN() > 10 && packetRateStats.getStandardDeviation() > 0) {
             double zScore = (currentRate - packetRateStats.getMean()) / packetRateStats.getStandardDeviation();
             if (Math.abs(zScore) > zScoreThreshold) {
-                publishAlert("TRAFFIC ANOMALY", "Traffic Volume Z-Score: " + String.format("%.2f", zScore), "MEDIUM");
+                publishAlert("TRAFFIC ANOMALY", "Z-Score: " + String.format("%.2f", zScore), "MEDIUM");
             }
         }
 
@@ -397,9 +344,7 @@ public class SentinelNetService {
                     flowTable.size(), tcpCount.get(), udpCount.get(), icmpCount.get()
             );
             statsRepository.save(stats);
-        } catch (Exception e) {
-            log.error("Error saving stats", e);
-        }
+        } catch (Exception e) { log.error("Error saving stats", e); }
 
         Map<Integer, Long> portCounts = flowTable.values().stream()
                 .flatMap(f -> f.getUniquePorts().stream())
@@ -418,7 +363,7 @@ public class SentinelNetService {
         statsMap.put("udp", udpCount.get());
         statsMap.put("icmp", icmpCount.get());
         statsMap.put("topPorts", topPorts);
-        statsMap.put("capturing", capturing); // Tell UI if we are running
+        statsMap.put("capturing", capturing);
 
         eventPublisher.publishEvent(new StatsEvent(this, statsMap));
 
@@ -433,11 +378,8 @@ public class SentinelNetService {
     private void setupForensicLogging() {
         File logDir = new File(LOG_DIR);
         if (!logDir.exists()) logDir.mkdirs();
-        try {
-            dumper = handle.dumpOpen(LOG_DIR + File.separator + "capture_" + System.currentTimeMillis() + ".pcap");
-        } catch (PcapNativeException | NotOpenException e) {
-            log.warn("Failed to open dump file: {}", e.getMessage());
-        }
+        try { dumper = handle.dumpOpen(LOG_DIR + File.separator + "capture_" + System.currentTimeMillis() + ".pcap"); }
+        catch (Exception e) { log.warn("Failed to open dump file: {}", e.getMessage()); }
     }
 
     private PcapNetworkInterface autoSelectInterface() {
@@ -468,9 +410,8 @@ public class SentinelNetService {
         } catch (Exception e) { log.error("Failed to save alert", e); }
     }
 
-    // --- API Accessors ---
     public Collection<FlowRecord> getActiveFlows() { return flowTable.values(); }
-    public void blockIp(String ip) { blockedIps.add(ip); publishAlert("MANUAL BLOCK", "Admin blocked " + ip, "HIGH"); }
+    public void blockIp(String ip) { blockedIps.add(ip); } // Removed duplicate alert here, handled in executeAutomatedAction
     public void unblockIp(String ip) { blockedIps.remove(ip); }
     public Set<String> getBlockedIps() { return blockedIps; }
     public int getSynFloodThreshold() { return synFloodThreshold; }
@@ -480,7 +421,6 @@ public class SentinelNetService {
     public double getZScoreThreshold() { return zScoreThreshold; }
     public void setZScoreThreshold(double val) { this.zScoreThreshold = val; }
 
-    // --- DTOs ---
     public static class FlowRecord {
         private String srcIp; private String dstIp; private String protocol;
         private long packetCount; private long bytes; private int synCount;
