@@ -121,6 +121,24 @@ if (alertCtx) {
     });
 }
 
+// --- MAP SETUP (NEW) ---
+let map;
+let markers = [];
+
+function initMap() {
+    if (!document.getElementById('map')) return;
+
+    // Initialize centered on a neutral view
+    map = L.map('map').setView([20, 0], 2);
+
+    // Dark Theme Tiles (CartoDB Dark Matter)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19
+    }).addTo(map);
+}
+
 // --- WebSocket & Logic ---
 let stompClient = null;
 let ipCache = {};
@@ -133,7 +151,7 @@ function connect() {
 
     stompClient.connect({}, function (frame) {
         console.log("WebSocket Connected");
-        // Status will be set to ONLINE/PAUSED when first stats arrive.
+        initMap(); // Initialize map on connect
 
         stompClient.subscribe('/topic/stats', function (data) {
             updateDashboard(JSON.parse(data.body));
@@ -146,22 +164,24 @@ function connect() {
         });
 
         stompClient.subscribe('/topic/flows', function (data) {
-            updateFlowTable(JSON.parse(data.body));
+            const flows = JSON.parse(data.body);
+            updateFlowTable(flows);
+            updateMap(flows); // Update map with new flow data
         });
 
         fetchHistory();
-        fetch('/api/flows').then(r => r.json()).then(flows => updateFlowTable(flows));
+        fetch('/api/flows').then(r => r.json()).then(flows => {
+            updateFlowTable(flows);
+            updateMap(flows);
+        });
         checkCaptureStatus();
     }, function(error) {
-        // ERROR CALLBACK: Handles Offline State
         console.error("WebSocket Error/Disconnect:", error);
         updateSystemStatus("OFFLINE");
-        // Try to reconnect after 5 seconds
         setTimeout(connect, 5000);
     });
 }
 
-// --- NEW: Update System Status UI ---
 function updateSystemStatus(state) {
     const el = document.getElementById('connStatus');
     if (!el) return;
@@ -169,15 +189,15 @@ function updateSystemStatus(state) {
     switch (state) {
         case 'ONLINE':
             el.innerHTML = '<i class="fas fa-circle"></i> Online';
-            el.className = 'text-neon-green'; // Defined in CSS
+            el.className = 'text-neon-green';
             break;
         case 'PAUSED':
             el.innerHTML = '<i class="fas fa-pause-circle"></i> Paused';
-            el.className = 'text-warning'; // Bootstrap yellow
+            el.className = 'text-warning';
             break;
         case 'OFFLINE':
             el.innerHTML = '<i class="fas fa-times-circle"></i> Offline';
-            el.className = 'text-danger'; // Bootstrap red
+            el.className = 'text-danger';
             break;
     }
 }
@@ -187,19 +207,13 @@ function updateDashboard(stats) {
     if(document.getElementById('bwValue')) document.getElementById('bwValue').innerText = formatBytes(stats.bandwidth);
     if(document.getElementById('flowValue')) document.getElementById('flowValue').innerText = stats.activeFlows;
 
-    // UPDATE STATUS UI based on backend capturing state
-    if (stats.capturing) {
-        updateSystemStatus('ONLINE');
-    } else {
-        updateSystemStatus('PAUSED');
-    }
+    if (stats.capturing) updateSystemStatus('ONLINE');
+    else updateSystemStatus('PAUSED');
 
-    // Sync UI buttons as well
     updateCaptureUI(stats.capturing);
 
     const now = new Date().toLocaleTimeString();
 
-    // 1. Update Traffic Chart
     if (trafficChart) {
         if (trafficChart.data.labels.length > 20) {
             trafficChart.data.labels.shift();
@@ -210,13 +224,11 @@ function updateDashboard(stats) {
         trafficChart.update();
     }
 
-    // 2. Update Protocol Chart
     if (protoChart) {
         protoChart.data.datasets[0].data = [stats.tcp, stats.udp, stats.icmp];
         protoChart.update();
     }
 
-    // 3. Update Port Chart
     if (portChart) {
         if (stats.topPorts && Object.keys(stats.topPorts).length > 0) {
             portChart.data.labels = Object.keys(stats.topPorts);
@@ -225,7 +237,6 @@ function updateDashboard(stats) {
         portChart.update();
     }
 
-    // 4. Update Alert Chart
     if (alertChart) {
         if (alertChart.data.labels.length > 20) {
             alertChart.data.labels.shift();
@@ -234,8 +245,31 @@ function updateDashboard(stats) {
         alertChart.data.labels.push(now);
         alertChart.data.datasets[0].data.push(alertCountBuffer);
         alertChart.update();
-        alertCountBuffer = 0; // Reset bucket
+        alertCountBuffer = 0;
     }
+}
+
+function updateMap(flows) {
+    if (!map) return;
+
+    // Clear existing markers
+    markers.forEach(m => map.removeLayer(m));
+    markers = [];
+
+    flows.forEach(flow => {
+        if (flow.geoLocation && flow.geoLocation.lat && flow.geoLocation.lon) {
+            // Simple circle marker
+            const marker = L.circleMarker([flow.geoLocation.lat, flow.geoLocation.lon], {
+                color: '#e94560',
+                fillColor: '#e94560',
+                fillOpacity: 0.7,
+                radius: 6 // Size based on traffic volume could be a future enhancement
+            }).addTo(map);
+
+            marker.bindPopup(`<b>${flow.srcIp}</b><br>${flow.geoLocation.country}<br>${flow.protocol}`);
+            markers.push(marker);
+        }
+    });
 }
 
 function showAlert(alert) {
@@ -275,26 +309,23 @@ function updateFlowTable(flows) {
     tbody.innerHTML = '';
 
     flows.forEach(flow => {
-        let country = ipCache[flow.srcIp] || '...';
-        if (!ipCache[flow.srcIp] && !isPrivateIp(flow.srcIp)) {
-            fetch(`http://ip-api.com/json/${flow.srcIp}?fields=countryCode`)
-                .then(r => r.json())
-                .then(data => {
-                    ipCache[flow.srcIp] = data.countryCode || 'UNK';
-                });
+        // Use cached country code if available from GeoIP service
+        let country = '...';
+        if (flow.geoLocation && flow.geoLocation.countryCode) {
+            country = flow.geoLocation.countryCode;
         } else if (isPrivateIp(flow.srcIp)) {
-             ipCache[flow.srcIp] = 'LAN';
+            country = 'LAN';
+        } else {
+            country = 'UNK';
         }
 
         let formattedBytes = formatBytes(flow.bytes * 8);
-
-        // Display DPI Metadata
         let displayProto = flow.metadata ? `<span class="text-neon-green">${flow.metadata}</span>` : flow.protocol;
 
         tbody.innerHTML += `
             <tr>
                 <td class="text-neon-blue">${flow.srcIp}</td>
-                <td><span class="badge bg-secondary">${ipCache[flow.srcIp] || 'LAN'}</span></td>
+                <td><span class="badge bg-secondary">${country}</span></td>
                 <td>${flow.dstIp}</td>
                 <td>${displayProto}</td>
                 <td>${formattedBytes}</td>
@@ -307,12 +338,10 @@ function isPrivateIp(ip) {
     return ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("127.") || ip.startsWith("172.");
 }
 
-// --- CAPTURE CONTROLS ---
 function startCapture() {
     fetch('/api/capture/start', { method: 'POST' })
         .then(r => {
             if(r.ok) {
-                // Optimistic UI Update
                 updateCaptureUI(true);
                 updateSystemStatus("ONLINE");
             }
@@ -324,7 +353,6 @@ function stopCapture() {
     fetch('/api/capture/stop', { method: 'POST' })
         .then(r => {
             if(r.ok) {
-                // Optimistic UI Update
                 updateCaptureUI(false);
                 updateSystemStatus("PAUSED");
             }
@@ -332,7 +360,6 @@ function stopCapture() {
         });
 }
 
-// --- FILTER LOGIC ---
 function applyFilter() {
     const filterInput = document.getElementById('bpfFilterInput');
     const filter = filterInput.value.trim();
@@ -354,7 +381,6 @@ function applyFilter() {
 
 function clearFilter() {
     document.getElementById('bpfFilterInput').value = '';
-
     fetch('/api/capture/filter', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -389,7 +415,7 @@ function showToast(title, message) {
 function checkCaptureStatus() {
     fetch('/api/capture/status').then(r => r.json()).then(status => {
         updateCaptureUI(status.running);
-        updateSystemStatus(status.running ? "ONLINE" : "PAUSED"); // Sync initial status
+        updateSystemStatus(status.running ? "ONLINE" : "PAUSED");
         document.getElementById('bpfFilterInput').value = status.filter || '';
     }).catch(e => updateSystemStatus("OFFLINE"));
 }
@@ -412,7 +438,6 @@ function updateCaptureUI(isRunning) {
     }
 }
 
-// --- BLOCKING ---
 function blockIp(ip) {
     Swal.fire({
         title: 'Block IP Address?',
@@ -469,7 +494,6 @@ function formatBytes(bits) {
     return parseFloat((bits / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-// --- MODIFIED: Beautiful Alert Clearing ---
 function clearAlerts() {
     Swal.fire({
         title: 'Clear Alert History?',
@@ -479,8 +503,8 @@ function clearAlerts() {
         confirmButtonColor: '#d33',
         cancelButtonColor: '#3085d6',
         confirmButtonText: 'Yes, delete history!',
-        background: '#16213e', // Dark theme background
-        color: '#e0e0e0'       // Light text
+        background: '#16213e',
+        color: '#e0e0e0'
     }).then((result) => {
         if (result.isConfirmed) {
             fetch('/api/alerts/clear', { method: 'DELETE' })
@@ -550,17 +574,8 @@ function saveSettings(event) {
         .then(r => showToast("Success", "Settings Saved"));
 }
 
-function exportAlerts() {
-    window.location.href = '/api/alerts/export/csv';
-}
-
-function exportFlows() {
-    window.location.href = '/api/flows/export/json';
-}
-
 function fetchHistory() {
     fetch('/api/alerts/history').then(r => r.json()).then(alerts => alerts.forEach(a => showAlert(a)));
 }
 
-fetchHistory();
 connect();

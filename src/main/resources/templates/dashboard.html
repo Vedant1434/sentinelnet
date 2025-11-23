@@ -5,6 +5,9 @@
     <title>SentinelNet: Security Operations Center</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+
+    <!-- Note: Removed Leaflet imports from here as they moved to map.html -->
+
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
@@ -127,6 +130,7 @@
 
     <ul class="nav flex-column">
         <li class="nav-item"><a onclick="showSection('dashboard')" class="nav-link active" id="nav-dashboard"><i class="fas fa-tachometer-alt"></i> Dashboard</a></li>
+        <li class="nav-item"><a href="/map" class="nav-link"><i class="fas fa-globe"></i> Connection Map</a></li> <!-- LINK UPDATED -->
         <li class="nav-item"><a onclick="showSection('blocked')" class="nav-link" id="nav-blocked"><i class="fas fa-ban"></i> Firewall Rules</a></li>
         <li class="nav-item"><a onclick="showSection('forensics')" class="nav-link" id="nav-forensics"><i class="fas fa-file-medical-alt"></i> Forensics</a></li>
         <li class="nav-item"><a onclick="showSection('settings')" class="nav-link" id="nav-settings"><i class="fas fa-sliders-h"></i> Configuration</a></li>
@@ -176,7 +180,10 @@
 
         <div class="row mt-3">
             <div class="col-md-8">
-                <div class="card p-3">
+
+                <!-- MAP REMOVED FROM DASHBOARD -->
+
+                <div class="card p-3 mb-3">
                     <div class="d-flex justify-content-between">
                         <h5>Network Traffic Volume</h5>
                         <small class="text-muted">Last 60 Seconds</small>

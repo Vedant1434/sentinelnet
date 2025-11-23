@@ -8,6 +8,7 @@ import com.sentinelnet.repository.FlowRepository;
 import com.sentinelnet.repository.StatsRepository;
 import com.sentinelnet.service.DpiService;
 import com.sentinelnet.service.ForensicLogger;
+import com.sentinelnet.service.GeoIpService; // NEW Import
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -37,23 +38,29 @@ public class SentinelNetService {
     private final RuleEngine ruleEngine;
     private final ForensicLogger forensicLogger;
     private final DpiService dpiService;
+    private final GeoIpService geoIpService; // NEW Service
 
+    // --- Pcap Resources ---
     private PcapHandle handle;
     private PcapDumper dumper;
     private volatile boolean capturing = false;
     private String currentBpfFilter = "";
 
+    // --- Data Structures ---
     private final ConcurrentHashMap<String, FlowRecord> flowTable = new ConcurrentHashMap<>();
     private final BlockingQueue<Packet> packetQueue = new ArrayBlockingQueue<>(50000);
     private final BlockingQueue<FlowRecord> detectionQueue = new ArrayBlockingQueue<>(50000);
 
+    // --- Thread Pools ---
     private final ExecutorService captureExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "Sentinel-Capture"));
     private final ExecutorService analysisExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "Sentinel-Analysis"));
     private final ExecutorService detectionExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "Sentinel-Detect"));
 
+    // --- Active Defense ---
     private final Set<String> blockedIps = ConcurrentHashMap.newKeySet();
     private static final String LOG_DIR = "forensic_logs";
 
+    // --- Statistics & ML ---
     private final DescriptiveStatistics packetRateStats = new DescriptiveStatistics(100);
     private final DescriptiveStatistics flowSizeStats = new DescriptiveStatistics(1000);
 
@@ -62,6 +69,7 @@ public class SentinelNetService {
     private final AtomicLong udpCount = new AtomicLong(0);
     private final AtomicLong icmpCount = new AtomicLong(0);
 
+    // --- Configuration ---
     private int synFloodThreshold = 100;
     private int portScanThreshold = 50;
     private double zScoreThreshold = 3.5;
@@ -75,7 +83,8 @@ public class SentinelNetService {
                               StatsRepository statsRepository,
                               RuleEngine ruleEngine,
                               ForensicLogger forensicLogger,
-                              DpiService dpiService) {
+                              DpiService dpiService,
+                              GeoIpService geoIpService) { // NEW Constructor Arg
         this.eventPublisher = eventPublisher;
         this.alertRepository = alertRepository;
         this.flowRepository = flowRepository;
@@ -83,6 +92,7 @@ public class SentinelNetService {
         this.ruleEngine = ruleEngine;
         this.forensicLogger = forensicLogger;
         this.dpiService = dpiService;
+        this.geoIpService = geoIpService;
     }
 
     @PostConstruct
@@ -230,6 +240,11 @@ public class SentinelNetService {
         FlowRecord flow = flowTable.compute(flowKey, (k, f) -> {
             if (f == null) f = new FlowRecord(srcIp, dstIp, protocol);
             f.update(packet.length(), finalIsSyn, finalDstPort, finalPayloadSize, finalAppInfo);
+
+            // NEW: Resolve GeoIP (Only once per flow to save API calls)
+            if (f.getGeoLocation() == null) {
+                f.setGeoLocation(geoIpService.resolve(srcIp));
+            }
             return f;
         });
 
@@ -258,7 +273,6 @@ public class SentinelNetService {
             DetectionRule rule = matchedRule.get();
             if (flow.getPacketCount() % 50 == 0) {
                 publishAlert("RULE MATCH: " + rule.getName(), rule.getDescription(), rule.getSeverity());
-                // NEW: Execute Rule Action
                 executeAutomatedAction(rule.getAction(), flow.getSrcIp());
             }
         }
@@ -267,7 +281,7 @@ public class SentinelNetService {
     private void checkHeuristics(FlowRecord flow) {
         if (flow.getSynCount() > synFloodThreshold) {
             publishAlert("SYN FLOOD", "High SYN rate ("+flow.getSynCount()+") from " + flow.srcIp, "CRITICAL");
-            executeAutomatedAction("BLOCK", flow.getSrcIp()); // Auto-Block SYN Floods
+            executeAutomatedAction("BLOCK", flow.getSrcIp());
             flow.setSynCount(0);
         }
         if (flow.getUniquePorts().size() > portScanThreshold) {
@@ -284,7 +298,6 @@ public class SentinelNetService {
         }
     }
 
-    // --- NEW: AUTOMATED ACTIONS ---
     private void executeAutomatedAction(String action, String ip) {
         if (action == null || action.equalsIgnoreCase("ALERT")) return;
 
@@ -411,7 +424,7 @@ public class SentinelNetService {
     }
 
     public Collection<FlowRecord> getActiveFlows() { return flowTable.values(); }
-    public void blockIp(String ip) { blockedIps.add(ip); } // Removed duplicate alert here, handled in executeAutomatedAction
+    public void blockIp(String ip) { blockedIps.add(ip); }
     public void unblockIp(String ip) { blockedIps.remove(ip); }
     public Set<String> getBlockedIps() { return blockedIps; }
     public int getSynFloodThreshold() { return synFloodThreshold; }
@@ -428,6 +441,7 @@ public class SentinelNetService {
         private Set<Integer> uniquePorts = ConcurrentHashMap.newKeySet();
         private long firstSeen; private long lastSeen;
         private String metadata;
+        private GeoIpService.GeoLocation geoLocation; // NEW Field
 
         public FlowRecord(String s, String d, String p) {
             this.srcIp = s; this.dstIp = d; this.protocol = p;
@@ -451,6 +465,8 @@ public class SentinelNetService {
         public long getLastSeen() { return lastSeen; }
         public long getStartTime() { return firstSeen; }
         public String getMetadata() { return metadata; }
+        public GeoIpService.GeoLocation getGeoLocation() { return geoLocation; } // Getter
+        public void setGeoLocation(GeoIpService.GeoLocation g) { this.geoLocation = g; } // Setter
         public void setSynCount(int s) { this.synCount = s; }
     }
 
