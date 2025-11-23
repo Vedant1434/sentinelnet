@@ -181,7 +181,6 @@ function updateDashboard(stats) {
     }
 
     // 3. Update Port Chart
-    // FIX: Update chart even if data is empty so grid lines persist
     if (portChart) {
         if (stats.topPorts && Object.keys(stats.topPorts).length > 0) {
             portChart.data.labels = Object.keys(stats.topPorts);
@@ -253,12 +252,17 @@ function updateFlowTable(flows) {
 
         let formattedBytes = formatBytes(flow.bytes * 8);
 
+        // --- NEW: DISPLAY DPI METADATA IF AVAILABLE ---
+        // If metadata exists (e.g., "HTTP: GET /"), display it.
+        // Otherwise, fallback to generic protocol (e.g., "TCP").
+        let displayProto = flow.metadata ? `<span class="text-neon-green">${flow.metadata}</span>` : flow.protocol;
+
         tbody.innerHTML += `
             <tr>
                 <td class="text-neon-blue">${flow.srcIp}</td>
                 <td><span class="badge bg-secondary">${ipCache[flow.srcIp] || 'LAN'}</span></td>
                 <td>${flow.dstIp}</td>
-                <td>${flow.protocol}</td>
+                <td>${displayProto}</td>
                 <td>${formattedBytes}</td>
                 <td><button class="btn btn-danger btn-block-ip" onclick="blockIp('${flow.srcIp}')"><i class="fas fa-ban"></i></button></td>
             </tr>`;

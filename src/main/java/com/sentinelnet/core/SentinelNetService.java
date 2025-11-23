@@ -6,16 +6,14 @@ import com.sentinelnet.model.PersistentFlow;
 import com.sentinelnet.model.TrafficStats;
 import com.sentinelnet.repository.FlowRepository;
 import com.sentinelnet.repository.StatsRepository;
+import com.sentinelnet.service.DpiService;
 import com.sentinelnet.service.ForensicLogger;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.math3.stat.descriptive.DescriptiveStatistics;
 import org.pcap4j.core.*;
-import org.pcap4j.packet.IpV4Packet;
-import org.pcap4j.packet.Packet;
-import org.pcap4j.packet.TcpPacket;
-import org.pcap4j.packet.UdpPacket;
+import org.pcap4j.packet.*;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -29,9 +27,11 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 /**
- * SentinelNet Core Service - Step 7: Enhanced Analytics Data.
+ * SentinelNet Core Service - Step 8: DPI & ARP Support.
  * Changes:
- * 1. broadcastStats() now calculates and sends 'topPorts' map.
+ * 1. Added DpiService.
+ * 2. processPacket() now handles ARP.
+ * 3. FlowRecord now stores Layer 7 metadata.
  */
 @Service
 @Slf4j
@@ -43,6 +43,7 @@ public class SentinelNetService {
     private final StatsRepository statsRepository;
     private final RuleEngine ruleEngine;
     private final ForensicLogger forensicLogger;
+    private final DpiService dpiService;
 
     // --- Pcap Resources ---
     private PcapHandle handle;
@@ -87,13 +88,15 @@ public class SentinelNetService {
                               FlowRepository flowRepository,
                               StatsRepository statsRepository,
                               RuleEngine ruleEngine,
-                              ForensicLogger forensicLogger) {
+                              ForensicLogger forensicLogger,
+                              DpiService dpiService) {
         this.eventPublisher = eventPublisher;
         this.alertRepository = alertRepository;
         this.flowRepository = flowRepository;
         this.statsRepository = statsRepository;
         this.ruleEngine = ruleEngine;
         this.forensicLogger = forensicLogger;
+        this.dpiService = dpiService;
     }
 
     @PostConstruct
@@ -159,7 +162,7 @@ public class SentinelNetService {
     }
 
     // ---------------------------------------------------------------------------
-    // 2. ANALYSIS LOOP
+    // 2. ANALYSIS LOOP (Updated for ARP & DPI)
     // ---------------------------------------------------------------------------
     private void analysisLoop() {
         while (capturing) {
@@ -174,6 +177,15 @@ public class SentinelNetService {
     }
 
     private void processPacket(Packet packet) {
+        // --- 1. HANDLE ARP ---
+        ArpPacket arpPacket = packet.get(ArpPacket.class);
+        if (arpPacket != null) {
+            // We can optionally track ARP flows, but for now we just log interesting ones
+            // or perform ARP spoofing detection (future)
+            return;
+        }
+
+        // --- 2. HANDLE IPV4 ---
         IpV4Packet ipV4Packet = packet.get(IpV4Packet.class);
         if (ipV4Packet == null) return;
 
@@ -192,28 +204,42 @@ public class SentinelNetService {
         boolean isSyn = false;
         int dstPort = 0;
         int payloadSize = 0;
+        byte[] payloadData = null;
 
         TcpPacket tcpPacket = packet.get(TcpPacket.class);
         if (tcpPacket != null) {
             isSyn = tcpPacket.getHeader().getSyn() && !tcpPacket.getHeader().getAck();
             dstPort = tcpPacket.getHeader().getDstPort().valueAsInt();
-            if(tcpPacket.getPayload() != null) payloadSize = tcpPacket.getPayload().length();
+            if(tcpPacket.getPayload() != null) {
+                payloadData = tcpPacket.getPayload().getRawData();
+                payloadSize = payloadData.length;
+            }
         }
 
         UdpPacket udpPacket = packet.get(UdpPacket.class);
         if(udpPacket != null) {
             dstPort = udpPacket.getHeader().getDstPort().valueAsInt();
-            if(udpPacket.getPayload() != null) payloadSize = udpPacket.getPayload().length();
+            if(udpPacket.getPayload() != null) {
+                payloadData = udpPacket.getPayload().getRawData();
+                payloadSize = payloadData.length;
+            }
+        }
+
+        // --- 3. DPI INSPECTION ---
+        String appInfo = null;
+        if (payloadData != null && payloadData.length > 0) {
+            appInfo = dpiService.inspect(payloadData, protocol, dstPort);
         }
 
         String flowKey = srcIp + "->" + dstIp + "/" + protocol;
         boolean finalIsSyn = isSyn;
         int finalDstPort = dstPort;
         int finalPayloadSize = payloadSize;
+        String finalAppInfo = appInfo;
 
         FlowRecord flow = flowTable.compute(flowKey, (k, f) -> {
             if (f == null) f = new FlowRecord(srcIp, dstIp, protocol);
-            f.update(packet.length(), finalIsSyn, finalDstPort, finalPayloadSize);
+            f.update(packet.length(), finalIsSyn, finalDstPort, finalPayloadSize, finalAppInfo);
             return f;
         });
 
@@ -297,6 +323,7 @@ public class SentinelNetService {
                         details.put("src", f.getSrcIp());
                         details.put("dst", f.getDstIp());
                         details.put("proto", f.getProtocol());
+                        details.put("metadata", f.getMetadata()); // Log DPI data!
                         details.put("bytes", f.getBytes());
                         details.put("duration", f.getLastSeen() - f.getStartTime());
                         forensicLogger.logEvent("FLOW", "FLOW_EXPIRY", "INFO", details);
@@ -323,7 +350,6 @@ public class SentinelNetService {
 
         long currentBandwidth = currentRate * 800 * 8;
 
-        // Save Stats
         try {
             TrafficStats stats = new TrafficStats(
                     null, new Date(), currentRate, currentBandwidth,
@@ -334,20 +360,15 @@ public class SentinelNetService {
             log.error("Error saving stats", e);
         }
 
-        // --- AGGREGATE TOP PORTS (New for Step 7) ---
-        // Calculate which ports are most active (simple stream aggregation)
-        // This might be expensive on huge tables, but fine for this scope.
         Map<Integer, Long> portCounts = flowTable.values().stream()
                 .flatMap(f -> f.getUniquePorts().stream())
                 .collect(Collectors.groupingBy(p -> p, Collectors.counting()));
 
-        // Sort and limit to top 5
         Map<Integer, Long> topPorts = portCounts.entrySet().stream()
                 .sorted(Map.Entry.<Integer, Long>comparingByValue().reversed())
                 .limit(5)
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (e1, e2) -> e1, LinkedHashMap::new));
 
-        // Prepare Stats Map
         Map<String, Object> statsMap = new HashMap<>();
         statsMap.put("pps", currentRate);
         statsMap.put("activeFlows", flowTable.size());
@@ -355,7 +376,7 @@ public class SentinelNetService {
         statsMap.put("tcp", tcpCount.get());
         statsMap.put("udp", udpCount.get());
         statsMap.put("icmp", icmpCount.get());
-        statsMap.put("topPorts", topPorts); // Included in payload
+        statsMap.put("topPorts", topPorts);
 
         eventPublisher.publishEvent(new StatsEvent(this, statsMap));
 
@@ -426,16 +447,18 @@ public class SentinelNetService {
         private int maxPayloadSize = 0;
         private Set<Integer> uniquePorts = ConcurrentHashMap.newKeySet();
         private long firstSeen; private long lastSeen;
+        private String metadata; // New Field for DPI info
 
         public FlowRecord(String s, String d, String p) {
             this.srcIp = s; this.dstIp = d; this.protocol = p;
             this.firstSeen = System.currentTimeMillis(); this.lastSeen = System.currentTimeMillis();
         }
-        public void update(long len, boolean isSyn, int port, int payloadSize) {
+        public void update(long len, boolean isSyn, int port, int payloadSize, String appInfo) {
             this.packetCount++; this.bytes += len; this.lastSeen = System.currentTimeMillis();
             if (isSyn) this.synCount++;
             if (port > 0) this.uniquePorts.add(port);
             if (payloadSize > this.maxPayloadSize) this.maxPayloadSize = payloadSize;
+            if (appInfo != null) this.metadata = appInfo; // Store DPI result if found
         }
         public String getSrcIp() { return srcIp; }
         public String getDstIp() { return dstIp; }
@@ -447,6 +470,7 @@ public class SentinelNetService {
         public int getMaxPayloadSize() { return maxPayloadSize; }
         public long getLastSeen() { return lastSeen; }
         public long getStartTime() { return firstSeen; }
+        public String getMetadata() { return metadata; } // Getter for frontend
         public void setSynCount(int s) { this.synCount = s; }
     }
 
