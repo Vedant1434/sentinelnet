@@ -8,7 +8,7 @@ import com.sentinelnet.repository.FlowRepository;
 import com.sentinelnet.repository.StatsRepository;
 import com.sentinelnet.service.DpiService;
 import com.sentinelnet.service.ForensicLogger;
-import com.sentinelnet.service.GeoIpService; // NEW Import
+import com.sentinelnet.service.GeoIpService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -38,7 +38,7 @@ public class SentinelNetService {
     private final RuleEngine ruleEngine;
     private final ForensicLogger forensicLogger;
     private final DpiService dpiService;
-    private final GeoIpService geoIpService; // NEW Service
+    private final GeoIpService geoIpService;
 
     // --- Pcap Resources ---
     private PcapHandle handle;
@@ -70,9 +70,14 @@ public class SentinelNetService {
     private final AtomicLong icmpCount = new AtomicLong(0);
 
     // --- Configuration ---
-    private int synFloodThreshold = 100;
-    private int portScanThreshold = 50;
-    private double zScoreThreshold = 3.5;
+    // Defaults
+    private static final int DEFAULT_SYN_THRESHOLD = 100;
+    private static final int DEFAULT_SCAN_THRESHOLD = 50;
+    private static final double DEFAULT_ZSCORE_THRESHOLD = 3.5;
+
+    private int synFloodThreshold = DEFAULT_SYN_THRESHOLD;
+    private int portScanThreshold = DEFAULT_SCAN_THRESHOLD;
+    private double zScoreThreshold = DEFAULT_ZSCORE_THRESHOLD;
 
     private static final long FLOW_IDLE_TIMEOUT_MS = 30_000;
     private static final long FLOW_ACTIVE_TIMEOUT_MS = 300_000;
@@ -84,7 +89,7 @@ public class SentinelNetService {
                               RuleEngine ruleEngine,
                               ForensicLogger forensicLogger,
                               DpiService dpiService,
-                              GeoIpService geoIpService) { // NEW Constructor Arg
+                              GeoIpService geoIpService) {
         this.eventPublisher = eventPublisher;
         this.alertRepository = alertRepository;
         this.flowRepository = flowRepository;
@@ -97,6 +102,14 @@ public class SentinelNetService {
 
     @PostConstruct
     public void init() { startCapture(); }
+
+    // --- NEW: Reset Configuration ---
+    public void resetConfiguration() {
+        this.synFloodThreshold = DEFAULT_SYN_THRESHOLD;
+        this.portScanThreshold = DEFAULT_SCAN_THRESHOLD;
+        this.zScoreThreshold = DEFAULT_ZSCORE_THRESHOLD;
+        log.info("Configuration reset to defaults.");
+    }
 
     public synchronized void startCapture() {
         if (capturing) {
@@ -465,8 +478,8 @@ public class SentinelNetService {
         public long getLastSeen() { return lastSeen; }
         public long getStartTime() { return firstSeen; }
         public String getMetadata() { return metadata; }
-        public GeoIpService.GeoLocation getGeoLocation() { return geoLocation; } // Getter
-        public void setGeoLocation(GeoIpService.GeoLocation g) { this.geoLocation = g; } // Setter
+        public GeoIpService.GeoLocation getGeoLocation() { return geoLocation; }
+        public void setGeoLocation(GeoIpService.GeoLocation g) { this.geoLocation = g; }
         public void setSynCount(int s) { this.synCount = s; }
     }
 

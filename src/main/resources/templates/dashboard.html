@@ -6,8 +6,6 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 
-    <!-- Note: Removed Leaflet imports from here as they moved to map.html -->
-
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
@@ -56,7 +54,6 @@
         .alert-HIGH { border-color: #ff9f43; color: #ffeaa7; }
         .alert-MEDIUM { border-color: #feca57; color: #fff3cd; }
 
-        /* Table Fixes for Dark Mode */
         table { color: var(--text-main) !important; }
         .table {
             color: var(--text-main) !important;
@@ -81,10 +78,7 @@
         tbody { color: var(--text-main) !important; }
 
         .btn-block-ip { padding: 2px 8px; font-size: 0.75rem; }
-
         .d-none { display: none !important; }
-
-        /* Scrollbar */
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: var(--bg-dark); }
         ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
@@ -130,7 +124,7 @@
 
     <ul class="nav flex-column">
         <li class="nav-item"><a onclick="showSection('dashboard')" class="nav-link active" id="nav-dashboard"><i class="fas fa-tachometer-alt"></i> Dashboard</a></li>
-        <li class="nav-item"><a href="/map" class="nav-link"><i class="fas fa-globe"></i> Connection Map</a></li> <!-- LINK UPDATED -->
+        <li class="nav-item"><a href="/map" class="nav-link"><i class="fas fa-globe"></i> Connection Map</a></li>
         <li class="nav-item"><a onclick="showSection('blocked')" class="nav-link" id="nav-blocked"><i class="fas fa-ban"></i> Firewall Rules</a></li>
         <li class="nav-item"><a onclick="showSection('forensics')" class="nav-link" id="nav-forensics"><i class="fas fa-file-medical-alt"></i> Forensics</a></li>
         <li class="nav-item"><a onclick="showSection('settings')" class="nav-link" id="nav-settings"><i class="fas fa-sliders-h"></i> Configuration</a></li>
@@ -180,9 +174,6 @@
 
         <div class="row mt-3">
             <div class="col-md-8">
-
-                <!-- MAP REMOVED FROM DASHBOARD -->
-
                 <div class="card p-3 mb-3">
                     <div class="d-flex justify-content-between">
                         <h5>Network Traffic Volume</h5>
@@ -273,23 +264,38 @@
         </div>
     </div>
 
+    <!-- SETTINGS SECTION (Updated with Tooltips and Reset) -->
     <div id="settingsSection" class="d-none">
         <h2 class="mb-4">Detection Configuration</h2>
-        <div class="card p-4 col-md-6">
+        <div class="card p-4 col-md-7">
+            <p class="text-muted mb-4">Fine-tune the Intrusion Detection System logic to reduce false positives.</p>
             <form onsubmit="saveSettings(event)">
                 <div class="mb-3">
-                    <label class="form-label">SYN Flood Threshold (pps)</label>
+                    <label class="form-label d-flex justify-content-between">
+                        <span>SYN Flood Threshold (pps)</span>
+                        <i class="fas fa-question-circle text-muted" data-bs-toggle="tooltip" title="Triggers a CRITICAL alert if a single IP sends more than this many SYN packets per second without completing the handshake. Lower values detect attacks faster but may flag legitimate heavy traffic."></i>
+                    </label>
                     <input type="number" id="synThreshold" class="form-control" required>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">Port Scan Threshold (unique ports/sec)</label>
+                    <label class="form-label d-flex justify-content-between">
+                        <span>Port Scan Threshold (unique ports/sec)</span>
+                        <i class="fas fa-question-circle text-muted" data-bs-toggle="tooltip" title="Triggers a HIGH alert if a single IP connects to more than this many distinct ports on a target within a short window. Used to detect reconnaissance."></i>
+                    </label>
                     <input type="number" id="scanThreshold" class="form-control" required>
                 </div>
-                <div class="mb-3">
-                    <label class="form-label">Anomaly Z-Score</label>
+                <div class="mb-4">
+                    <label class="form-label d-flex justify-content-between">
+                        <span>Anomaly Z-Score</span>
+                        <i class="fas fa-question-circle text-muted" data-bs-toggle="tooltip" title="Statistical threshold for traffic volume anomalies. A higher Z-Score (e.g. 4.0) means only extreme spikes trigger alerts. Lower values (e.g. 2.0) are more sensitive."></i>
+                    </label>
                     <input type="number" step="0.1" id="zThreshold" class="form-control" required>
                 </div>
-                <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Configuration</button>
+
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Changes</button>
+                    <button type="button" class="btn btn-outline-warning" onclick="resetSettings()"><i class="fas fa-undo"></i> Reset Defaults</button>
+                </div>
             </form>
         </div>
     </div>

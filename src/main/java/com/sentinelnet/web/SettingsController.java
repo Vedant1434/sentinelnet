@@ -29,6 +29,13 @@ public class SettingsController {
         return ResponseEntity.ok("Settings Updated");
     }
 
+    // --- NEW: Reset Endpoint ---
+    @PostMapping("/settings/reset")
+    public ResponseEntity<String> resetSettings() {
+        service.resetConfiguration();
+        return ResponseEntity.ok("Configuration reset to defaults.");
+    }
+
     @PostMapping("/block/{ip}")
     public ResponseEntity<String> blockIp(@PathVariable String ip) {
         service.blockIp(ip);
