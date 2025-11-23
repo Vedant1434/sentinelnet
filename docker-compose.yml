@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  sentinel-db:
+    image: postgres:15-alpine
+    container_name: sentinel_postgres
+    environment:
+      POSTGRES_DB: sentinelnet
+      POSTGRES_USER: sentinel_user
+      POSTGRES_PASSWORD: sentinel246
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+volumes:
+  postgres_data:

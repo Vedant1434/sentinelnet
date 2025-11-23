@@ -64,7 +64,7 @@ if (protoCtx) {
     });
 }
 
-// --- Top Ports Bar Chart (Fixed) ---
+// --- Top Ports Bar Chart ---
 let portChart;
 const portCtx = getChartCtx('portChart');
 if (portCtx) {
@@ -91,7 +91,7 @@ if (portCtx) {
     });
 }
 
-// --- Alert Timeline Chart (Fixed) ---
+// --- Alert Timeline Chart ---
 let alertChart;
 const alertCtx = getChartCtx('alertChart');
 if (alertCtx) {
@@ -132,10 +132,8 @@ function connect() {
     stompClient.debug = null;
 
     stompClient.connect({}, function (frame) {
-        if(document.getElementById('connStatus')) {
-            document.getElementById('connStatus').innerHTML = '<i class="fas fa-circle"></i> Online';
-        }
         console.log("WebSocket Connected");
+        // Status will be set to ONLINE/PAUSED when first stats arrive.
 
         stompClient.subscribe('/topic/stats', function (data) {
             updateDashboard(JSON.parse(data.body));
@@ -153,13 +151,51 @@ function connect() {
 
         fetchHistory();
         fetch('/api/flows').then(r => r.json()).then(flows => updateFlowTable(flows));
+        checkCaptureStatus();
+    }, function(error) {
+        // ERROR CALLBACK: Handles Offline State
+        console.error("WebSocket Error/Disconnect:", error);
+        updateSystemStatus("OFFLINE");
+        // Try to reconnect after 5 seconds
+        setTimeout(connect, 5000);
     });
+}
+
+// --- NEW: Update System Status UI ---
+function updateSystemStatus(state) {
+    const el = document.getElementById('connStatus');
+    if (!el) return;
+
+    switch (state) {
+        case 'ONLINE':
+            el.innerHTML = '<i class="fas fa-circle"></i> Online';
+            el.className = 'text-neon-green'; // Defined in CSS
+            break;
+        case 'PAUSED':
+            el.innerHTML = '<i class="fas fa-pause-circle"></i> Paused';
+            el.className = 'text-warning'; // Bootstrap yellow
+            break;
+        case 'OFFLINE':
+            el.innerHTML = '<i class="fas fa-times-circle"></i> Offline';
+            el.className = 'text-danger'; // Bootstrap red
+            break;
+    }
 }
 
 function updateDashboard(stats) {
     if(document.getElementById('ppsValue')) document.getElementById('ppsValue').innerText = stats.pps;
     if(document.getElementById('bwValue')) document.getElementById('bwValue').innerText = formatBytes(stats.bandwidth);
     if(document.getElementById('flowValue')) document.getElementById('flowValue').innerText = stats.activeFlows;
+
+    // UPDATE STATUS UI based on backend capturing state
+    if (stats.capturing) {
+        updateSystemStatus('ONLINE');
+    } else {
+        updateSystemStatus('PAUSED');
+    }
+
+    // Sync UI buttons as well
+    updateCaptureUI(stats.capturing);
 
     const now = new Date().toLocaleTimeString();
 
@@ -252,9 +288,7 @@ function updateFlowTable(flows) {
 
         let formattedBytes = formatBytes(flow.bytes * 8);
 
-        // --- NEW: DISPLAY DPI METADATA IF AVAILABLE ---
-        // If metadata exists (e.g., "HTTP: GET /"), display it.
-        // Otherwise, fallback to generic protocol (e.g., "TCP").
+        // Display DPI Metadata
         let displayProto = flow.metadata ? `<span class="text-neon-green">${flow.metadata}</span>` : flow.protocol;
 
         tbody.innerHTML += `
@@ -273,15 +307,142 @@ function isPrivateIp(ip) {
     return ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("127.") || ip.startsWith("172.");
 }
 
-function blockIp(ip) {
-    if(!confirm(`Block traffic from ${ip}?`)) return;
-    fetch(`/api/block/${ip}`, { method: 'POST' })
+// --- CAPTURE CONTROLS ---
+function startCapture() {
+    fetch('/api/capture/start', { method: 'POST' })
         .then(r => {
             if(r.ok) {
-                alert(`${ip} has been added to the blacklist.`);
-                loadBlockedIps();
+                // Optimistic UI Update
+                updateCaptureUI(true);
+                updateSystemStatus("ONLINE");
             }
+            else alert("Failed to start capture");
         });
+}
+
+function stopCapture() {
+    fetch('/api/capture/stop', { method: 'POST' })
+        .then(r => {
+            if(r.ok) {
+                // Optimistic UI Update
+                updateCaptureUI(false);
+                updateSystemStatus("PAUSED");
+            }
+            else alert("Failed to stop capture");
+        });
+}
+
+// --- FILTER LOGIC ---
+function applyFilter() {
+    const filterInput = document.getElementById('bpfFilterInput');
+    const filter = filterInput.value.trim();
+
+    if (!filter) {
+        showToast("Warning", "Filter cannot be empty");
+        return;
+    }
+
+    fetch('/api/capture/filter', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ filter: filter })
+    }).then(r => {
+        if(r.ok) showToast("Success", `Filter Applied: ${filter}`);
+        else showToast("Error", "Invalid Filter Syntax");
+    });
+}
+
+function clearFilter() {
+    document.getElementById('bpfFilterInput').value = '';
+
+    fetch('/api/capture/filter', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ filter: "" })
+    }).then(r => {
+        if(r.ok) showToast("Info", "Filter Cleared - Capturing All Traffic");
+    });
+}
+
+function showToast(title, message) {
+    const container = document.getElementById('toastContainer');
+    const id = 'toast-' + Date.now();
+    const html = `
+        <div id="${id}" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header">
+                <strong class="me-auto">${title}</strong>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast"></button>
+            </div>
+            <div class="toast-body">${message}</div>
+        </div>
+    `;
+    container.insertAdjacentHTML('beforeend', html);
+    const toastEl = document.getElementById(id);
+    const toast = new bootstrap.Toast(toastEl);
+    toast.show();
+
+    toastEl.addEventListener('hidden.bs.toast', () => {
+        toastEl.remove();
+    });
+}
+
+function checkCaptureStatus() {
+    fetch('/api/capture/status').then(r => r.json()).then(status => {
+        updateCaptureUI(status.running);
+        updateSystemStatus(status.running ? "ONLINE" : "PAUSED"); // Sync initial status
+        document.getElementById('bpfFilterInput').value = status.filter || '';
+    }).catch(e => updateSystemStatus("OFFLINE"));
+}
+
+function updateCaptureUI(isRunning) {
+    const badge = document.getElementById('captureStatusBadge');
+    const startBtn = document.getElementById('btnStart');
+    const stopBtn = document.getElementById('btnStop');
+
+    if (isRunning) {
+        badge.innerText = "RUNNING";
+        badge.className = "badge bg-success";
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+    } else {
+        badge.innerText = "STOPPED";
+        badge.className = "badge bg-danger";
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+    }
+}
+
+// --- BLOCKING ---
+function blockIp(ip) {
+    Swal.fire({
+        title: 'Block IP Address?',
+        text: `Traffic from ${ip} will be dropped immediately.`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#e94560',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Yes, Block it!',
+        background: '#16213e',
+        color: '#ffffff'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            fetch(`/api/block/${ip}`, { method: 'POST' })
+                .then(r => {
+                    if(r.ok) {
+                        loadBlockedIps();
+                        Swal.fire({
+                            title: 'Blocked!',
+                            text: `${ip} has been blacklisted.`,
+                            icon: 'success',
+                            background: '#16213e',
+                            color: '#ffffff',
+                            timer: 1500,
+                            showConfirmButton: false
+                        });
+                    }
+                });
+        }
+    });
 }
 
 function unblockIp(ip) {
@@ -292,15 +453,10 @@ function unblockIp(ip) {
 function loadBlockedIps() {
     const tbody = document.getElementById('blockedTableBody');
     if (!tbody) return;
-
     fetch('/api/blocked').then(r => r.json()).then(ips => {
         tbody.innerHTML = '';
         ips.forEach(ip => {
-            tbody.innerHTML += `
-                <tr>
-                    <td class="text-neon-red">${ip}</td>
-                    <td><button class="btn btn-success btn-sm" onclick="unblockIp('${ip}')">Unblock</button></td>
-                </tr>`;
+            tbody.innerHTML += `<tr><td class="text-neon-red">${ip}</td><td><button class="btn btn-success btn-sm" onclick="unblockIp('${ip}')">Unblock</button></td></tr>`;
         });
     });
 }
@@ -313,11 +469,42 @@ function formatBytes(bits) {
     return parseFloat((bits / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+// --- MODIFIED: Beautiful Alert Clearing ---
 function clearAlerts() {
-    const container = document.getElementById('alertContainer');
-    if (container) {
-        container.innerHTML = '<div class="text-muted text-center mt-5 opacity-50"><i class="fas fa-check-circle fa-3x mb-3"></i><br>System Secure</div>';
-    }
+    Swal.fire({
+        title: 'Clear Alert History?',
+        text: "All security alerts will be permanently deleted from the database.",
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Yes, delete history!',
+        background: '#16213e', // Dark theme background
+        color: '#e0e0e0'       // Light text
+    }).then((result) => {
+        if (result.isConfirmed) {
+            fetch('/api/alerts/clear', { method: 'DELETE' })
+                .then(r => {
+                    if (r.ok) {
+                        const container = document.getElementById('alertContainer');
+                        if (container) {
+                            container.innerHTML = '<div class="text-muted text-center mt-5 opacity-50"><i class="fas fa-check-circle fa-3x mb-3"></i><br>System Secure</div>';
+                        }
+                        Swal.fire({
+                            title: 'Deleted!',
+                            text: 'Alert history has been wiped.',
+                            icon: 'success',
+                            background: '#16213e',
+                            color: '#ffffff',
+                            timer: 1500,
+                            showConfirmButton: false
+                        });
+                    } else {
+                        showToast("Error", "Failed to clear alerts.");
+                    }
+                });
+        }
+    });
 }
 
 function showSection(sectionId) {
@@ -360,7 +547,7 @@ function saveSettings(event) {
         zScoreThreshold: document.getElementById('zThreshold').value
     };
     fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) })
-        .then(r => alert(r.ok ? "Saved" : "Error"));
+        .then(r => showToast("Success", "Settings Saved"));
 }
 
 function fetchHistory() {

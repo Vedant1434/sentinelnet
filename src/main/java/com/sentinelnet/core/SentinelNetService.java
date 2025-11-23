@@ -26,13 +26,6 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
-/**
- * SentinelNet Core Service - Step 8: DPI & ARP Support.
- * Changes:
- * 1. Added DpiService.
- * 2. processPacket() now handles ARP.
- * 3. FlowRecord now stores Layer 7 metadata.
- */
 @Service
 @Slf4j
 public class SentinelNetService {
@@ -102,22 +95,46 @@ public class SentinelNetService {
     @PostConstruct
     public void init() { startCapture(); }
 
+    // --- CONTROL METHODS (Updated for Step 11) ---
+
     public synchronized void startCapture() {
-        if (capturing) return;
+        if (capturing) {
+            log.info("Capture already running.");
+            return;
+        }
         capturing = true;
+        log.info("Starting Capture Engine...");
+
+        // Submitting tasks to existing executors
         captureExecutor.submit(this::captureLoop);
         analysisExecutor.submit(this::analysisLoop);
         detectionExecutor.submit(this::detectionLoop);
     }
 
-    @PreDestroy
-    public void shutdown() {
+    public synchronized void stopCapture() {
+        if (!capturing) return;
+        log.info("Stopping Capture Engine...");
         capturing = false;
-        if (dumper != null && dumper.isOpen()) dumper.close();
-        if (handle != null && handle.isOpen()) handle.close();
-        captureExecutor.shutdownNow();
-        analysisExecutor.shutdownNow();
-        detectionExecutor.shutdownNow();
+
+        // Closing the handle throws an exception in captureLoop, breaking the loop
+        if (handle != null && handle.isOpen()) {
+            try {
+                handle.close();
+            } catch (Exception e) {
+                log.error("Error closing handle", e);
+            }
+        }
+        if (dumper != null && dumper.isOpen()) {
+            dumper.close();
+        }
+    }
+
+    public boolean isCapturing() {
+        return capturing;
+    }
+
+    public String getCurrentFilter() {
+        return currentBpfFilter;
     }
 
     public void setBpfFilter(String filterExpression) {
@@ -132,6 +149,14 @@ public class SentinelNetService {
         }
     }
 
+    @PreDestroy
+    public void shutdown() {
+        stopCapture();
+        captureExecutor.shutdownNow();
+        analysisExecutor.shutdownNow();
+        detectionExecutor.shutdownNow();
+    }
+
     // ---------------------------------------------------------------------------
     // 1. CAPTURE LOOP
     // ---------------------------------------------------------------------------
@@ -140,12 +165,18 @@ public class SentinelNetService {
             PcapNetworkInterface nif = autoSelectInterface();
             if (nif == null) {
                 log.error("CRITICAL: No network interface found.");
+                capturing = false;
                 return;
             }
             log.info("Starting Capture on: {}", nif.getName());
+
+            // Increased buffer size for high throughput
             handle = nif.openLive(65536, PcapNetworkInterface.PromiscuousMode.PROMISCUOUS, 10);
 
-            if (!currentBpfFilter.isEmpty()) handle.setFilter(currentBpfFilter, BpfProgram.BpfCompileMode.OPTIMIZE);
+            if (!currentBpfFilter.isEmpty()) {
+                handle.setFilter(currentBpfFilter, BpfProgram.BpfCompileMode.OPTIMIZE);
+            }
+
             setupForensicLogging();
 
             while (capturing && handle.isOpen()) {
@@ -156,34 +187,41 @@ public class SentinelNetService {
                         if (!packetQueue.offer(packet)) log.warn("Queue Full - Dropping Packet");
                         currentPacketCount.incrementAndGet();
                     }
-                } catch (Exception e) { log.warn("Capture Error: {}", e.getMessage()); }
+                } catch (Exception e) {
+                    // Pcap4j throws exception when handle is closed asynchronously
+                    if (capturing) log.warn("Capture Packet Error: {}", e.getMessage());
+                }
             }
-        } catch (Exception e) { log.error("Fatal Capture Error", e); }
+        } catch (Exception e) {
+            log.error("Fatal Capture Error", e);
+            capturing = false;
+        }
+        log.info("Capture Loop Stopped");
     }
 
     // ---------------------------------------------------------------------------
-    // 2. ANALYSIS LOOP (Updated for ARP & DPI)
+    // 2. ANALYSIS LOOP
     // ---------------------------------------------------------------------------
     private void analysisLoop() {
         while (capturing) {
             try {
-                Packet packet = packetQueue.take();
-                processPacket(packet);
+                // Poll with timeout to allow checking 'capturing' flag periodically
+                Packet packet = packetQueue.poll(1, TimeUnit.SECONDS);
+                if (packet != null) {
+                    processPacket(packet);
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) { }
         }
+        log.info("Analysis Loop Stopped");
     }
 
     private void processPacket(Packet packet) {
         // --- 1. HANDLE ARP ---
         ArpPacket arpPacket = packet.get(ArpPacket.class);
-        if (arpPacket != null) {
-            // We can optionally track ARP flows, but for now we just log interesting ones
-            // or perform ARP spoofing detection (future)
-            return;
-        }
+        if (arpPacket != null) return;
 
         // --- 2. HANDLE IPV4 ---
         IpV4Packet ipV4Packet = packet.get(IpV4Packet.class);
@@ -253,15 +291,18 @@ public class SentinelNetService {
     private void detectionLoop() {
         while (capturing) {
             try {
-                FlowRecord flow = detectionQueue.take();
-                checkSignatures(flow);
-                checkHeuristics(flow);
-                checkProtocolAnomalies(flow);
+                FlowRecord flow = detectionQueue.poll(1, TimeUnit.SECONDS);
+                if (flow != null) {
+                    checkSignatures(flow);
+                    checkHeuristics(flow);
+                    checkProtocolAnomalies(flow);
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             }
         }
+        log.info("Detection Loop Stopped");
     }
 
     private void checkSignatures(FlowRecord flow) {
@@ -323,7 +364,7 @@ public class SentinelNetService {
                         details.put("src", f.getSrcIp());
                         details.put("dst", f.getDstIp());
                         details.put("proto", f.getProtocol());
-                        details.put("metadata", f.getMetadata()); // Log DPI data!
+                        details.put("metadata", f.getMetadata());
                         details.put("bytes", f.getBytes());
                         details.put("duration", f.getLastSeen() - f.getStartTime());
                         forensicLogger.logEvent("FLOW", "FLOW_EXPIRY", "INFO", details);
@@ -377,6 +418,7 @@ public class SentinelNetService {
         statsMap.put("udp", udpCount.get());
         statsMap.put("icmp", icmpCount.get());
         statsMap.put("topPorts", topPorts);
+        statsMap.put("capturing", capturing); // Tell UI if we are running
 
         eventPublisher.publishEvent(new StatsEvent(this, statsMap));
 
@@ -438,16 +480,14 @@ public class SentinelNetService {
     public double getZScoreThreshold() { return zScoreThreshold; }
     public void setZScoreThreshold(double val) { this.zScoreThreshold = val; }
 
-    // ---------------------------------------------------------------------------
-    // 5. DTOs & EVENTS
-    // ---------------------------------------------------------------------------
+    // --- DTOs ---
     public static class FlowRecord {
         private String srcIp; private String dstIp; private String protocol;
         private long packetCount; private long bytes; private int synCount;
         private int maxPayloadSize = 0;
         private Set<Integer> uniquePorts = ConcurrentHashMap.newKeySet();
         private long firstSeen; private long lastSeen;
-        private String metadata; // New Field for DPI info
+        private String metadata;
 
         public FlowRecord(String s, String d, String p) {
             this.srcIp = s; this.dstIp = d; this.protocol = p;
@@ -458,7 +498,7 @@ public class SentinelNetService {
             if (isSyn) this.synCount++;
             if (port > 0) this.uniquePorts.add(port);
             if (payloadSize > this.maxPayloadSize) this.maxPayloadSize = payloadSize;
-            if (appInfo != null) this.metadata = appInfo; // Store DPI result if found
+            if (appInfo != null) this.metadata = appInfo;
         }
         public String getSrcIp() { return srcIp; }
         public String getDstIp() { return dstIp; }
@@ -470,7 +510,7 @@ public class SentinelNetService {
         public int getMaxPayloadSize() { return maxPayloadSize; }
         public long getLastSeen() { return lastSeen; }
         public long getStartTime() { return firstSeen; }
-        public String getMetadata() { return metadata; } // Getter for frontend
+        public String getMetadata() { return metadata; }
         public void setSynCount(int s) { this.synCount = s; }
     }
 
