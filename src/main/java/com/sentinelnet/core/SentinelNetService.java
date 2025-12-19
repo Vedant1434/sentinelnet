@@ -40,27 +40,22 @@ public class SentinelNetService {
     private final DpiService dpiService;
     private final GeoIpService geoIpService;
 
-    // --- Pcap Resources ---
     private PcapHandle handle;
     private PcapDumper dumper;
     private volatile boolean capturing = false;
     private String currentBpfFilter = "";
 
-    // --- Data Structures ---
     private final ConcurrentHashMap<String, FlowRecord> flowTable = new ConcurrentHashMap<>();
     private final BlockingQueue<Packet> packetQueue = new ArrayBlockingQueue<>(50000);
     private final BlockingQueue<FlowRecord> detectionQueue = new ArrayBlockingQueue<>(50000);
 
-    // --- Thread Pools ---
     private final ExecutorService captureExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "Sentinel-Capture"));
     private final ExecutorService analysisExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "Sentinel-Analysis"));
     private final ExecutorService detectionExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "Sentinel-Detect"));
 
-    // --- Active Defense ---
     private final Set<String> blockedIps = ConcurrentHashMap.newKeySet();
     private static final String LOG_DIR = "forensic_logs";
 
-    // --- Statistics & ML ---
     private final DescriptiveStatistics packetRateStats = new DescriptiveStatistics(100);
     private final DescriptiveStatistics flowSizeStats = new DescriptiveStatistics(1000);
 
@@ -69,8 +64,7 @@ public class SentinelNetService {
     private final AtomicLong udpCount = new AtomicLong(0);
     private final AtomicLong icmpCount = new AtomicLong(0);
 
-    // --- Configuration ---
-    // Defaults
+    // Configuration
     private static final int DEFAULT_SYN_THRESHOLD = 100;
     private static final int DEFAULT_SCAN_THRESHOLD = 50;
     private static final double DEFAULT_ZSCORE_THRESHOLD = 3.5;
@@ -103,7 +97,6 @@ public class SentinelNetService {
     @PostConstruct
     public void init() { startCapture(); }
 
-    // --- NEW: Reset Configuration ---
     public void resetConfiguration() {
         this.synFloodThreshold = DEFAULT_SYN_THRESHOLD;
         this.portScanThreshold = DEFAULT_SCAN_THRESHOLD;
@@ -161,13 +154,16 @@ public class SentinelNetService {
         try {
             PcapNetworkInterface nif = autoSelectInterface();
             if (nif == null) {
-                log.error("CRITICAL: No network interface found.");
+                log.error("CRITICAL: No valid network interface found.");
                 capturing = false;
                 return;
             }
-            log.info("Starting Capture on: {}", nif.getName());
+            log.info(">>> CAPTURING ON: {} ({})", nif.getDescription(), nif.getName());
+
+            // Open with promiscuous mode, larger snaplen, and short timeout
             handle = nif.openLive(65536, PcapNetworkInterface.PromiscuousMode.PROMISCUOUS, 10);
             if (!currentBpfFilter.isEmpty()) handle.setFilter(currentBpfFilter, BpfProgram.BpfCompileMode.OPTIMIZE);
+
             setupForensicLogging();
 
             while (capturing && handle.isOpen()) {
@@ -176,12 +172,65 @@ public class SentinelNetService {
                     if (packet != null) {
                         if (dumper != null && dumper.isOpen()) dumper.dump(packet, handle.getTimestamp());
                         if (!packetQueue.offer(packet)) log.warn("Queue Full - Dropping Packet");
-                        currentPacketCount.incrementAndGet();
+
+                        long count = currentPacketCount.incrementAndGet();
+                        if (count % 100 == 0) log.debug("Captured {} packets so far...", count);
                     }
                 } catch (Exception e) { if (capturing) log.warn("Capture Packet Error: {}", e.getMessage()); }
             }
         } catch (Exception e) { log.error("Fatal Capture Error", e); capturing = false; }
         log.info("Capture Loop Stopped");
+    }
+
+    // --- SMART INTERFACE SELECTION ---
+    private PcapNetworkInterface autoSelectInterface() {
+        try {
+            List<PcapNetworkInterface> allDevs = Pcaps.findAllDevs();
+            if (allDevs == null || allDevs.isEmpty()) {
+                log.error("No network interfaces found by Pcap4j!");
+                return null;
+            }
+
+            log.info("--- Scanning Network Interfaces ---");
+            PcapNetworkInterface bestCandidate = null;
+
+            for (PcapNetworkInterface dev : allDevs) {
+                String name = dev.getName().toLowerCase();
+                String desc = (dev.getDescription() != null) ? dev.getDescription().toLowerCase() : "";
+
+                boolean isLoopback = name.contains("loopback");
+                boolean isVirtual = desc.contains("virtual") || desc.contains("vmware") || desc.contains("hyper-v");
+                boolean isRealNetwork = desc.contains("wi-fi") || desc.contains("wireless") || desc.contains("ethernet") || desc.contains("controller") || desc.contains("network adapter");
+
+                boolean hasIp = false;
+                for (PcapAddress addr : dev.getAddresses()) {
+                    if (addr.getAddress() instanceof Inet4Address) {
+                        String ip = addr.getAddress().getHostAddress();
+                        if (!ip.equals("0.0.0.0") && !ip.equals("127.0.0.1") && !ip.startsWith("169.254")) {
+                            hasIp = true;
+                            log.info("Found Candidate: [{}] {} (IP: {})", dev.getName(), dev.getDescription(), ip);
+                        }
+                    }
+                }
+
+                // Prioritize Real Network Adapters with IPs
+                if (hasIp && isRealNetwork && !isVirtual && !isLoopback) {
+                    return dev; // Found ideal candidate, return immediately
+                }
+
+                // Fallback: Keep track of any interface with an IP just in case
+                if (hasIp && !isLoopback && bestCandidate == null) {
+                    bestCandidate = dev;
+                }
+            }
+
+            // If no ideal "Wi-Fi/Ethernet" found, use best fallback
+            return bestCandidate != null ? bestCandidate : allDevs.get(0);
+
+        } catch (PcapNativeException e) {
+            log.error("Error listing network interfaces", e);
+            return null;
+        }
     }
 
     // --- ANALYSIS LOOP ---
@@ -193,7 +242,6 @@ public class SentinelNetService {
             } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             catch (Exception e) { }
         }
-        log.info("Analysis Loop Stopped");
     }
 
     private void processPacket(Packet packet) {
@@ -253,8 +301,6 @@ public class SentinelNetService {
         FlowRecord flow = flowTable.compute(flowKey, (k, f) -> {
             if (f == null) f = new FlowRecord(srcIp, dstIp, protocol);
             f.update(packet.length(), finalIsSyn, finalDstPort, finalPayloadSize, finalAppInfo);
-
-            // NEW: Resolve GeoIP (Only once per flow to save API calls)
             if (f.getGeoLocation() == null) {
                 f.setGeoLocation(geoIpService.resolve(srcIp));
             }
@@ -277,7 +323,6 @@ public class SentinelNetService {
                 }
             } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
         }
-        log.info("Detection Loop Stopped");
     }
 
     private void checkSignatures(FlowRecord flow) {
@@ -313,11 +358,10 @@ public class SentinelNetService {
 
     private void executeAutomatedAction(String action, String ip) {
         if (action == null || action.equalsIgnoreCase("ALERT")) return;
-
         if (action.equalsIgnoreCase("BLOCK")) {
             if (!blockedIps.contains(ip)) {
                 blockIp(ip);
-                publishAlert("AUTO-BLOCK", "Active Defense System blocked IP: " + ip, "INFO");
+                publishAlert("AUTO-BLOCK", "System blocked IP: " + ip, "INFO");
             }
         }
     }
@@ -408,22 +452,6 @@ public class SentinelNetService {
         catch (Exception e) { log.warn("Failed to open dump file: {}", e.getMessage()); }
     }
 
-    private PcapNetworkInterface autoSelectInterface() {
-        try {
-            List<PcapNetworkInterface> allDevs = Pcaps.findAllDevs();
-            for (PcapNetworkInterface dev : allDevs) {
-                if (dev.getName().toLowerCase().contains("loopback")) continue;
-                for (PcapAddress addr : dev.getAddresses()) {
-                    if (addr.getAddress() instanceof Inet4Address) {
-                        String ip = addr.getAddress().getHostAddress();
-                        if (!ip.equals("0.0.0.0") && !ip.equals("127.0.0.1") && !ip.startsWith("169.254")) return dev;
-                    }
-                }
-            }
-            return allDevs.isEmpty() ? null : allDevs.get(0);
-        } catch (PcapNativeException e) { return null; }
-    }
-
     private void publishAlert(String type, String message, String severity) {
         log.warn("IDS ALERT [{}]: {}", severity, message);
         Map<String, Object> details = new HashMap<>();
@@ -454,7 +482,7 @@ public class SentinelNetService {
         private Set<Integer> uniquePorts = ConcurrentHashMap.newKeySet();
         private long firstSeen; private long lastSeen;
         private String metadata;
-        private GeoIpService.GeoLocation geoLocation; // NEW Field
+        private GeoIpService.GeoLocation geoLocation;
 
         public FlowRecord(String s, String d, String p) {
             this.srcIp = s; this.dstIp = d; this.protocol = p;
