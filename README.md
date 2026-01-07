@@ -137,7 +137,7 @@ src/main/resources
 
 1.  **Clone the Repository**
     ```bash
-    git clone [https://github.com/your-repo/sentinelnet.git](https://github.com/your-repo/sentinelnet.git)
+    git clone https://github.com/Vedant1434/sentinelnet
     cd sentinelnet
     ```
 
